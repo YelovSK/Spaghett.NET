@@ -1,7 +1,6 @@
 # syntax=docker/dockerfile:1
 
 FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
-ARG TARGETARCH=amd64
 WORKDIR /src
 
 COPY ["global.json", "./"]
@@ -13,15 +12,9 @@ COPY ["Bot.Persistence/Bot.Persistence.csproj", "Bot.Persistence/"]
 RUN dotnet restore "Bot.API/Bot.API.csproj"
 
 COPY . .
-RUN case "$TARGETARCH" in \
-        amd64) RID=linux-x64 ;; \
-        arm64) RID=linux-arm64 ;; \
-        arm) RID=linux-arm ;; \
-        *) RID=linux-$TARGETARCH ;; \
-    esac \
-    && dotnet publish "Bot.API/Bot.API.csproj" \
+RUN dotnet publish "Bot.API/Bot.API.csproj" \
         -c Release \
-        -r "$RID" \
+        -r linux-x64 \
         --self-contained false \
         -o /app/publish \
         /p:CopyPublishOutput=false \
