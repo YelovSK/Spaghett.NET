@@ -1,4 +1,4 @@
-﻿using Bot.API.Extensions;
+using Bot.API.Extensions;
 using Bot.Application.Services;
 using NetCord.Rest;
 using NetCord.Services.ApplicationCommands;

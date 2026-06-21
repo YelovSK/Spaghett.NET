@@ -1,36 +1,28 @@
-﻿using System.Diagnostics.CodeAnalysis;
-using System.Drawing;
-using System.Drawing.Imaging;
 using Bot.Application.Services;
+using SkiaSharp;
 
 namespace Bot.Infrastructure.Services;
 
-[SuppressMessage("Interoperability", "CA1416:Validate platform compatibility")]
 public class ImageService : IImageService
 {
     public MemoryStream GetSolidColorImage(int r, int g, int b, int width, int height, eImageFormat format)
     {
-        using var bmp = new Bitmap(width, height);
-        using var graphics = Graphics.FromImage(bmp);
-        graphics.Clear(Color.FromArgb(r, g, b));
+        var imageInfo = new SKImageInfo(width, height, SKColorType.Bgra8888, SKAlphaType.Opaque);
+        using var bmp = new SKBitmap(imageInfo);
+        using var canvas = new SKCanvas(bmp);
 
-        var ms = new MemoryStream();
-        bmp.Save(ms, Helpers.GetImageFormat(format));
-        ms.Position = 0;
+        canvas.Clear(new SKColor((byte)r, (byte)g, (byte)b));
 
-        return ms;
+        return Helpers.EncodeBitmap(bmp, format);
     }
-
 
     public MemoryStream GenerateMandelbrot(double zoom, double centerX, double centerY, uint iterations, int width,
         int height, eImageFormat format)
     {
-        var bmp = new Bitmap(width, height, PixelFormat.Format32bppArgb);
-        var rect = new Rectangle(0, 0, width, height);
-        var data = bmp.LockBits(rect, ImageLockMode.WriteOnly, bmp.PixelFormat);
-
-        var stride = data.Stride;
-        var scan0 = data.Scan0;
+        var imageInfo = new SKImageInfo(width, height, SKColorType.Bgra8888, SKAlphaType.Opaque);
+        using var bmp = new SKBitmap(imageInfo);
+        var stride = bmp.RowBytes;
+        var pixels = bmp.GetPixels();
 
         var viewWidth = 3.5 / zoom;
         var viewHeight = viewWidth * height / width;
@@ -39,7 +31,7 @@ public class ImageService : IImageService
 
         unsafe
         {
-            var row0 = (byte*)scan0;
+            var row0 = (byte*)pixels;
 
             Parallel.For(0, height, y =>
             {
@@ -76,13 +68,6 @@ public class ImageService : IImageService
             });
         }
 
-        bmp.UnlockBits(data);
-
-        var ms = new MemoryStream();
-        bmp.Save(ms, Helpers.GetImageFormat(format));
-        ms.Position = 0;
-        bmp.Dispose();
-        
-        return ms;
+        return Helpers.EncodeBitmap(bmp, format);
     }
 }

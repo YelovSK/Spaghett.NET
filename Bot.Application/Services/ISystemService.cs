@@ -1,4 +1,4 @@
-﻿namespace Bot.Application.Services;
+namespace Bot.Application.Services;
 
 /// <summary>
 /// Random OS functions. Realistically mostly just WinAPI.

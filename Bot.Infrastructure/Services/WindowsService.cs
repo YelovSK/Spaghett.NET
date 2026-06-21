@@ -1,10 +1,10 @@
-﻿using System.Diagnostics;
+using System.Diagnostics;
 using System.Diagnostics.CodeAnalysis;
-using System.Drawing;
 using System.Runtime.InteropServices;
 using System.Text;
 using Bot.Application.Services;
 using Bot.Infrastructure.Interop;
+using SkiaSharp;
 
 namespace Bot.Infrastructure.Services;
 
@@ -18,23 +18,46 @@ public class WindowsService : ISystemService
         var width = User32.GetSystemMetrics(0); // SM_CXSCREEN
         var height = User32.GetSystemMetrics(1); // SM_CYSCREEN
 
-        using var bmp = new Bitmap(width, height);
-        using var g = Graphics.FromImage(bmp);
+        var desktopWindow = User32.GetDesktopWindow();
+        var hdcScreen = User32.GetWindowDC(desktopWindow);
+        var hdcMemory = Gdi32.CreateCompatibleDC(hdcScreen);
+        var hBitmap = Gdi32.CreateCompatibleBitmap(hdcScreen, width, height);
+        var previousObject = Gdi32.SelectObject(hdcMemory, hBitmap);
 
-        var hdcBitmap = g.GetHdc();
-        var hdcScreen = User32.GetWindowDC(User32.GetDesktopWindow());
+        try
+        {
+            Gdi32.BitBlt(hdcMemory, 0, 0, width, height, hdcScreen, 0, 0,
+                Gdi32.SRCCOPY | Gdi32.CAPTUREBLT);
 
-        Gdi32.BitBlt(hdcBitmap, 0, 0, width, height, hdcScreen, 0, 0,
-            CopyPixelOperation.SourceCopy | CopyPixelOperation.CaptureBlt);
+            var imageInfo = new SKImageInfo(width, height, SKColorType.Bgra8888, SKAlphaType.Opaque);
+            using var bmp = new SKBitmap(imageInfo);
 
-        g.ReleaseHdc(hdcBitmap);
-        User32.ReleaseDC(User32.GetDesktopWindow(), hdcScreen);
-        
-        var ms = new MemoryStream();
-        bmp.Save(ms, Helpers.GetImageFormat(format));
-        ms.Position = 0;
+            var bitmapInfo = new Gdi32.BitmapInfo
+            {
+                Header = new Gdi32.BitmapInfoHeader
+                {
+                    Size = (uint)Marshal.SizeOf<Gdi32.BitmapInfoHeader>(),
+                    Width = width,
+                    Height = -height,
+                    Planes = 1,
+                    BitCount = 32,
+                    Compression = Gdi32.BI_RGB,
+                    SizeImage = (uint)(bmp.RowBytes * height),
+                },
+            };
 
-        return ms;
+            Gdi32.GetDIBits(hdcMemory, hBitmap, 0, (uint)height, bmp.GetPixels(),
+                ref bitmapInfo, Gdi32.DIB_RGB_COLORS);
+
+            return Helpers.EncodeBitmap(bmp, format);
+        }
+        finally
+        {
+            Gdi32.SelectObject(hdcMemory, previousObject);
+            Gdi32.DeleteObject(hBitmap);
+            Gdi32.DeleteDC(hdcMemory);
+            User32.ReleaseDC(desktopWindow, hdcScreen);
+        }
     }
     
     public string? GetClipboardData()

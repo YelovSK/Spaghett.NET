@@ -19,13 +19,24 @@ builder.Services
     .AddApplicationCommands()
     .AddGatewayHandlers(typeof(Program).Assembly)
     .AddSingleton<IImageService, ImageService>()
-    .AddSingleton<ISystemService, WindowsService>()
     .AddDbContext<BotContext>();
+
+if (OperatingSystem.IsWindows())
+{
+    builder.Services.AddSingleton<ISystemService, WindowsService>();
+}
 
 var host = builder.Build();
 
 // Add commands from modules
-host.AddModules(typeof(Program).Assembly);
+host.AddApplicationCommandModule<Bot.API.Modules.MiscModule>();
+host.AddApplicationCommandModule<Bot.API.Modules.ImageModule>();
+host.AddApplicationCommandModule<Bot.API.Modules.UserModule>();
+
+if (OperatingSystem.IsWindows())
+{
+    host.AddApplicationCommandModule<Bot.API.Modules.SystemModule>();
+}
 
 // Apply DB migrations
 using (var scope = host.Services.CreateScope())

@@ -1,0 +1,11 @@
+services:
+  spaghettnet:
+    build:
+      context: .
+    container_name: spaghettnet
+    restart: unless-stopped
+    environment:
+      Discord__Token: ${DISCORD_TOKEN}
+      ConnectionStrings__Bot: "Data Source=/data/data.db"
+    volumes:
+      - ./data:/data
