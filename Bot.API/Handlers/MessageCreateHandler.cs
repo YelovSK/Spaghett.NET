@@ -1,26 +1,48 @@
-﻿using Bot.API.Extensions;
+using Bot.API.Extensions;
+using Bot.API.Handlers.MessageResponders;
 using Bot.Persistence;
 using NetCord.Gateway;
 using NetCord.Hosting.Gateway;
+using NetCord.Rest;
 
 namespace Bot.API.Handlers;
 
-public class MessageCreateHandler(BotContext dbContext, GatewayClient gatewayClient) : IMessageCreateGatewayHandler
+public class MessageCreateHandler(
+    BotContext dbContext,
+    GatewayClient gatewayClient,
+    IEnumerable<IMessageCreateResponder> responders) : IMessageCreateGatewayHandler
 {
     public async ValueTask HandleAsync(Message message)
     {
         await IncrementMessageCountAsync(message.Author);
-        
+
         // Ignore this bot's messages
         if (message.Author.Id == gatewayClient.Id)
         {
             return;
         }
-        
-        await HandleSpecialWords(message);
-        await HandleMentions(message);
-        await HandleMessageLength(message);
-        await HandleCapsLock(message);
+
+        foreach (var responder in responders)
+        {
+            if (!await responder.ShouldRespondAsync(message))
+            {
+                continue;
+            }
+
+            await gatewayClient.Rest.TriggerTypingStateAsync(message.ChannelId);
+            var response = await responder.GetResponseAsync(message);
+            if (response is null)
+            {
+                continue;
+            }
+
+            await SendResponseAsync(message, response);
+
+            if (response.StopProcessing)
+            {
+                return;
+            }
+        }
     }
 
     private async Task IncrementMessageCountAsync(NetCord.User user)
@@ -30,56 +52,30 @@ public class MessageCreateHandler(BotContext dbContext, GatewayClient gatewayCli
         await dbContext.SaveChangesAsync();
     }
 
-    private async Task HandleSpecialWords(Message message)
+    private async Task SendResponseAsync(Message sourceMessage, MessageCreateResponse response)
     {
-        var words = message.Content
-            .SplitWords()
-            .ToHashSet(StringComparer.InvariantCultureIgnoreCase);
-        
-        if (words.Contains("cat"))
+        var trimmedContent = TrimToDiscordMessageLimit(response.Content);
+
+        switch (response.ResponseType)
         {
-            await message.ReplyAsync("ur cat");
+            case MessageResponseType.Reply:
+                await sourceMessage.ReplyAsync(trimmedContent);
+                break;
+
+            case MessageResponseType.ChannelMessage:
+                await gatewayClient.Rest.SendMessageAsync(sourceMessage.ChannelId, new MessageProperties
+                {
+                    Content = trimmedContent,
+                });
+                break;
+
+            default:
+                throw new ArgumentOutOfRangeException(nameof(response), response.ResponseType, "Unknown message response type.");
         }
     }
-    
-    private async Task HandleMentions(Message message)
-    {
-        if (message.MentionedUsers.Any(u => u.Id == gatewayClient.Id))
-        {
-            await message.ReplyAsync("stfu");
-        }
-        
-        if (message.MentionEveryone)
-        {
-            await message.ReplyAsync("war crime detected");
-        }
-    }
-    
-    private async Task HandleMessageLength(Message message)
-    {
-        var specialLengths = new[] { 69, 322, 420, 1337 };
-        var specialLength = specialLengths.SingleOrDefault(x => x == message.Content.Length);
-        
-        if (specialLength != 0)
-        {
-            await message.ReplyAsync($"poggers {specialLength} characters");
-        }
-    }
-    
-    private async Task HandleCapsLock(Message message)
-    {
-        if (message.Content.Length < 10)
-        {
-            return;
-        }
-        
-        var isAllUpper = message.Content
-            .Where(c => !char.IsWhiteSpace(c))
-            .All(char.IsUpper);
-        
-        if (isAllUpper)
-        {
-            await message.ReplyAsync("y u shout");
-        }
-    }
+
+    private static string TrimToDiscordMessageLimit(string response) =>
+        response.Length <= 2000
+            ? response
+            : response[..1997] + "...";
 }

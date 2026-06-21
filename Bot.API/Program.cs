@@ -1,4 +1,6 @@
 ﻿using Bot.Application.Services;
+using Bot.API.Handlers.MessageResponders;
+using Bot.API.Services;
 using Bot.Infrastructure.Services;
 using Bot.Persistence;
 using Microsoft.EntityFrameworkCore;
@@ -9,7 +11,11 @@ using NetCord.Hosting.Gateway;
 using NetCord.Hosting.Services;
 using NetCord.Hosting.Services.ApplicationCommands;
 
-var builder = Host.CreateApplicationBuilder(args);
+var builder = Host.CreateApplicationBuilder(new HostApplicationBuilderSettings
+{
+    Args = args,
+    ContentRootPath = AppContext.BaseDirectory,
+});
 
 builder.Services
     .AddDiscordGateway(options =>
@@ -18,6 +24,14 @@ builder.Services
     })
     .AddApplicationCommands()
     .AddGatewayHandlers(typeof(Program).Assembly)
+    .AddSingleton(new HttpClient { Timeout = TimeSpan.FromMinutes(5) })
+    .AddSingleton<OpenAIChatService>()
+    .AddSingleton<IMessageCreateResponder, OpenAIMessageResponder>()
+    .AddSingleton<IMessageCreateResponder, SpecialWordResponder>()
+    .AddSingleton<IMessageCreateResponder, BotMentionResponder>()
+    .AddSingleton<IMessageCreateResponder, EveryoneMentionResponder>()
+    .AddSingleton<IMessageCreateResponder, MessageLengthResponder>()
+    .AddSingleton<IMessageCreateResponder, CapsLockResponder>()
     .AddSingleton<IImageService, ImageService>()
     .AddDbContext<BotContext>();
 
