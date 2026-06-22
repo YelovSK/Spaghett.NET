@@ -14,6 +14,9 @@ public partial class OpenAIMessageResponder(
     [GeneratedRegex(@"<(?<name>[A-Za-z0-9_]+)>")]
     private static partial Regex EmoteRegex();
 
+    [GeneratedRegex(@"<a?:(?<name>[A-Za-z0-9_]+):\d+>")]
+    private static partial Regex DiscordEmoteRegex();
+
     public ValueTask<bool> ShouldRespondAsync(Message message)
     {
         var shouldRespond =
@@ -96,7 +99,10 @@ public partial class OpenAIMessageResponder(
                 continue;
             }
 
-            messages.Add(new OpenAIContextMessage(contextMessage.CreatedAt, contextMessage.Author.Username, contextMessage.Content));
+            messages.Add(new OpenAIContextMessage(
+                contextMessage.CreatedAt,
+                contextMessage.Author.Username,
+                NormalizeEmoteTokens(contextMessage.Content)));
 
             if (messages.Count == CONTEXT_MESSAGE_COUNT)
             {
@@ -107,4 +113,7 @@ public partial class OpenAIMessageResponder(
         messages.Reverse();
         return messages;
     }
+
+    private static string NormalizeEmoteTokens(string messageContent) =>
+        DiscordEmoteRegex().Replace(messageContent, match => $"<{match.Groups["name"].Value}>");
 }
