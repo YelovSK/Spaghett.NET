@@ -29,7 +29,7 @@ public partial class OpenAIMessageResponder(
     public async ValueTask<MessageCreateResponse?> GetResponseAsync(Message message)
     {
         var contextMessages = await GetContextMessagesAsync(message);
-        var response = await chatService.GetResponseAsync(message.Content, contextMessages);
+        var response = await chatService.GetResponseAsync(NormalizeEmoteTokens(message.Content), contextMessages);
 
         if (string.IsNullOrWhiteSpace(response))
         {
