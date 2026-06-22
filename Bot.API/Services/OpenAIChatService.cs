@@ -17,20 +17,28 @@ public class OpenAIChatService(
         {
             var options = configuration.GetSection("OpenAI").Get<OpenAIOptions>();
             return !string.IsNullOrWhiteSpace(options?.BaseUrl) &&
-                   !string.IsNullOrWhiteSpace(options.Model);
+                   !string.IsNullOrWhiteSpace(options.Model) &&
+                   !string.IsNullOrWhiteSpace(options.SystemPromptPath);
         }
     }
 
     public async Task<string?> GetResponseAsync(
         string prompt,
         IReadOnlyList<OpenAIContextMessage>? contextMessages = null,
-        IReadOnlyList<OpenAIEmote>? emotes = null,
         CancellationToken cancellationToken = default)
     {
         var options = configuration.GetSection("OpenAI").Get<OpenAIOptions>() ?? new OpenAIOptions();
-        if (string.IsNullOrWhiteSpace(options.BaseUrl) || string.IsNullOrWhiteSpace(options.Model))
+        if (string.IsNullOrWhiteSpace(options.BaseUrl) ||
+            string.IsNullOrWhiteSpace(options.Model) ||
+            string.IsNullOrWhiteSpace(options.SystemPromptPath))
         {
-            logger.LogInformation("OpenAI-compatible chat is not configured. Set OpenAI:BaseUrl and OpenAI:Model to enable it.");
+            logger.LogInformation("OpenAI-compatible chat is not configured. Set OpenAI:BaseUrl, OpenAI:Model, and OpenAI:SystemPromptPath to enable it.");
+            return null;
+        }
+
+        var systemPrompt = await ReadSystemPromptAsync(options.SystemPromptPath, cancellationToken);
+        if (string.IsNullOrWhiteSpace(systemPrompt))
+        {
             return null;
         }
 
@@ -40,7 +48,7 @@ public class OpenAIChatService(
         {
             Content = JsonContent.Create(new ChatCompletionRequest(
                 options.Model,
-                BuildMessages(prompt, options.SystemPrompt, contextMessages, emotes),
+                BuildMessages(prompt, systemPrompt, contextMessages),
                 options.Temperature,
                 options.MaxTokens)),
         };
@@ -92,11 +100,40 @@ public class OpenAIChatService(
         return trimmedBaseUrl + "/v1";
     }
 
+    private async Task<string?> ReadSystemPromptAsync(string systemPromptPath, CancellationToken cancellationToken)
+    {
+        var resolvedPath = ResolveConfiguredPath(systemPromptPath);
+        if (!File.Exists(resolvedPath))
+        {
+            logger.LogWarning("Configured system prompt file does not exist: {SystemPromptPath}", resolvedPath);
+            return null;
+        }
+
+        try
+        {
+            return await File.ReadAllTextAsync(resolvedPath, cancellationToken);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            logger.LogWarning(ex, "Could not read configured system prompt file: {SystemPromptPath}", resolvedPath);
+            return null;
+        }
+    }
+
+    private string ResolveConfiguredPath(string configuredPath)
+    {
+        if (Path.IsPathFullyQualified(configuredPath))
+        {
+            return configuredPath;
+        }
+
+        return Path.GetFullPath(configuredPath);
+    }
+
     private static IReadOnlyList<ChatMessage> BuildMessages(
         string prompt,
         string? systemPrompt,
-        IReadOnlyList<OpenAIContextMessage>? contextMessages,
-        IReadOnlyList<OpenAIEmote>? emotes)
+        IReadOnlyList<OpenAIContextMessage>? contextMessages)
     {
         var messages = new List<ChatMessage>();
 
@@ -105,24 +142,13 @@ public class OpenAIChatService(
             messages.Add(new ChatMessage("system", systemPrompt));
         }
 
-        if (emotes is { Count: > 0 })
-        {
-            messages.Add(new ChatMessage(
-                "system",
-                string.Join(
-                    Environment.NewLine,
-                    "Available server emotes. Prefer these over normal Unicode emojis when an emote fits.",
-                    string.Join(", ", emotes.Select(emote => emote.Name).Distinct(StringComparer.InvariantCultureIgnoreCase)),
-                    "To send a server emote, write only <emote_name>. For example, write <kekw>.")));
-        }
-
         if (contextMessages is { Count: > 0 })
         {
             messages.Add(new ChatMessage(
                 "user",
                 string.Join(
                     Environment.NewLine,
-                    ["Recent Discord messages before the user's question:", .. contextMessages.Select(message => $"{message.AuthorName}: {message.Content}")])));
+                    ["Recent Discord messages before the user's question:", .. contextMessages.Select(FormatContextMessage)])));
         }
 
         messages.Add(new ChatMessage("user", prompt));
@@ -134,7 +160,7 @@ public class OpenAIChatService(
         public string? BaseUrl { get; init; }
         public string? ApiKey { get; init; }
         public string? Model { get; init; }
-        public string? SystemPrompt { get; init; }
+        public string? SystemPromptPath { get; init; }
         public double? Temperature { get; init; }
         public int? MaxTokens { get; init; }
     }
@@ -154,8 +180,9 @@ public class OpenAIChatService(
 
     private sealed record ChatChoice(
         [property: JsonPropertyName("message")] ChatMessage Message);
+
+    private static string FormatContextMessage(OpenAIContextMessage message) =>
+        $"[{message.SentAt.ToUniversalTime():yyyy-MM-dd HH:mm:ss 'UTC'}] {message.AuthorName}: {message.Content}";
 }
 
-public sealed record OpenAIContextMessage(string AuthorName, string Content);
-
-public sealed record OpenAIEmote(string Name, string Token);
+public sealed record OpenAIContextMessage(DateTimeOffset SentAt, string AuthorName, string Content);

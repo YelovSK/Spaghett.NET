@@ -10,8 +10,8 @@ services:
       OpenAI__BaseUrl: ${OPENAI_BASE_URL}
       OpenAI__ApiKey: ${OPENAI_API_KEY}
       OpenAI__Model: ${OPENAI_MODEL}
-      OpenAI__SystemPrompt: ${OPENAI_SYSTEM_PROMPT}
       OpenAI__Temperature: ${OPENAI_TEMPERATURE}
       OpenAI__MaxTokens: ${OPENAI_MAX_TOKENS}
     volumes:
       - ./data:/data
+      - ./config:/app/config:ro

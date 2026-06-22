@@ -1,6 +1,7 @@
 using Bot.API.Extensions;
 using Bot.API.Handlers.MessageResponders;
 using Bot.Persistence;
+using Microsoft.EntityFrameworkCore;
 using NetCord.Gateway;
 using NetCord.Hosting.Gateway;
 using NetCord.Rest;
@@ -8,7 +9,7 @@ using NetCord.Rest;
 namespace Bot.API.Handlers;
 
 public class MessageCreateHandler(
-    BotContext dbContext,
+    IDbContextFactory<BotContext> dbContextFactory,
     GatewayClient gatewayClient,
     IEnumerable<IMessageCreateResponder> responders) : IMessageCreateGatewayHandler
 {
@@ -47,6 +48,8 @@ public class MessageCreateHandler(
 
     private async Task IncrementMessageCountAsync(NetCord.User user)
     {
+        await using var dbContext = await dbContextFactory.CreateDbContextAsync();
+
         var dbUser = await dbContext.Users.TryAddAsync(user.Id, user.Username);
         dbUser.MessagesSent++;
         await dbContext.SaveChangesAsync();

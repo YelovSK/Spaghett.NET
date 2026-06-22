@@ -485,3 +485,5 @@ $RECYCLE.BIN/
 
 PublishOutput
 data/
+Bot.API/appsettings.Development.json
+config/system-prompt.md

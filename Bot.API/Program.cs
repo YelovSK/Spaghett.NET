@@ -3,7 +3,9 @@ using Bot.API.Handlers.MessageResponders;
 using Bot.API.Services;
 using Bot.Infrastructure.Services;
 using Bot.Persistence;
+using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using NetCord.Gateway;
@@ -32,8 +34,10 @@ builder.Services
     .AddSingleton<IMessageCreateResponder, EveryoneMentionResponder>()
     .AddSingleton<IMessageCreateResponder, MessageLengthResponder>()
     .AddSingleton<IMessageCreateResponder, CapsLockResponder>()
-    .AddSingleton<IImageService, ImageService>()
-    .AddDbContext<BotContext>();
+    .AddSingleton<IImageService, ImageService>();
+
+builder.Services
+    .AddDbContextFactory<BotContext>(ConfigureBotContext);
 
 if (OperatingSystem.IsWindows())
 {
@@ -53,10 +57,40 @@ if (OperatingSystem.IsWindows())
 }
 
 // Apply DB migrations
-using (var scope = host.Services.CreateScope())
+var dbContextFactory = host.Services.GetRequiredService<IDbContextFactory<BotContext>>();
+await using (var dbContext = await dbContextFactory.CreateDbContextAsync())
 {
-    var dbContext = scope.ServiceProvider.GetRequiredService<BotContext>();
     await dbContext.Database.MigrateAsync();
 }
 
 await host.RunAsync();
+
+void ConfigureBotContext(DbContextOptionsBuilder options)
+{
+    var connectionString = builder.Configuration.GetConnectionString("Bot");
+    if (string.IsNullOrWhiteSpace(connectionString))
+    {
+        var folder = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "SpaghettNET");
+        connectionString = $"Data Source={Path.Combine(folder, "data.db")}";
+    }
+
+    EnsureSqliteDirectory(connectionString);
+    options.UseSqlite(connectionString);
+}
+
+static void EnsureSqliteDirectory(string connectionString)
+{
+    var builder = new SqliteConnectionStringBuilder(connectionString);
+    var dataSource = builder.DataSource;
+
+    if (string.IsNullOrWhiteSpace(dataSource) || dataSource is ":memory:")
+    {
+        return;
+    }
+
+    var directory = Path.GetDirectoryName(Path.GetFullPath(dataSource));
+    if (!string.IsNullOrWhiteSpace(directory))
+    {
+        Directory.CreateDirectory(directory);
+    }
+}

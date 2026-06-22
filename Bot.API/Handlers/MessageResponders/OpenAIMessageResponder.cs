@@ -10,7 +10,6 @@ public partial class OpenAIMessageResponder(
     OpenAIChatService chatService) : IMessageCreateResponder
 {
     private const int CONTEXT_MESSAGE_COUNT = 10;
-    private const int EMOTE_CONTEXT_COUNT = 50;
 
     [GeneratedRegex(@"<(?<name>[A-Za-z0-9_]+)>")]
     private static partial Regex EmoteRegex();
@@ -27,8 +26,7 @@ public partial class OpenAIMessageResponder(
     public async ValueTask<MessageCreateResponse?> GetResponseAsync(Message message)
     {
         var contextMessages = await GetContextMessagesAsync(message);
-        var emotes = await GetEmotesAsync(message);
-        var response = await chatService.GetResponseAsync(message.Content, contextMessages, emotes);
+        var response = await chatService.GetResponseAsync(message.Content, contextMessages);
 
         if (string.IsNullOrWhiteSpace(response))
         {
@@ -37,22 +35,41 @@ public partial class OpenAIMessageResponder(
 
         return new MessageCreateResponse(
             MessageResponseType.ChannelMessage,
-            InsertEmoteTokens(response, emotes),
+            await InsertEmoteTokensAsync(message, response),
             true);
     }
 
-    private static string InsertEmoteTokens(string response, IReadOnlyList<OpenAIEmote> emotes)
+    private async Task<string> InsertEmoteTokensAsync(Message sourceMessage, string response)
     {
-        if (emotes.Count == 0)
+        if (sourceMessage.GuildId is not { } guildId)
         {
             return response;
         }
 
-        var emoteTokens = emotes
-            .GroupBy(emote => emote.Name, StringComparer.InvariantCultureIgnoreCase)
+        var matches = EmoteRegex().Matches(response);
+        if (matches.Count == 0)
+        {
+            return response;
+        }
+
+        var requestedEmoteNames = matches
+            .Select(match => match.Groups["name"].Value)
+            .ToHashSet(StringComparer.InvariantCultureIgnoreCase);
+
+        var emojis = await gatewayClient.Rest.GetGuildEmojisAsync(guildId);
+        var emoteTokens = emojis
+            .Where(emoji => emoji.Available != false)
+            .Where(emoji => requestedEmoteNames.Contains(emoji.Name))
+            .GroupBy(emoji => emoji.Name, StringComparer.InvariantCultureIgnoreCase)
             .ToDictionary(
                 group => group.Key,
-                group => group.First().Token,
+                group =>
+                {
+                    var emoji = group.First();
+                    return emoji.Animated
+                        ? $"<a:{emoji.Name}:{emoji.Id}>"
+                        : $"<:{emoji.Name}:{emoji.Id}>";
+                },
                 StringComparer.InvariantCultureIgnoreCase);
 
         return EmoteRegex().Replace(response, match =>
@@ -79,7 +96,7 @@ public partial class OpenAIMessageResponder(
                 continue;
             }
 
-            messages.Add(new OpenAIContextMessage(contextMessage.Author.Username, contextMessage.Content));
+            messages.Add(new OpenAIContextMessage(contextMessage.CreatedAt, contextMessage.Author.Username, contextMessage.Content));
 
             if (messages.Count == CONTEXT_MESSAGE_COUNT)
             {
@@ -89,26 +106,5 @@ public partial class OpenAIMessageResponder(
 
         messages.Reverse();
         return messages;
-    }
-
-    private async Task<IReadOnlyList<OpenAIEmote>> GetEmotesAsync(Message message)
-    {
-        if (message.GuildId is not { } guildId)
-        {
-            return [];
-        }
-
-        var emojis = await gatewayClient.Rest.GetGuildEmojisAsync(guildId);
-
-        return emojis
-            .Where(emoji => emoji.Available != false)
-            .OrderBy(emoji => emoji.Name)
-            .Take(EMOTE_CONTEXT_COUNT)
-            .Select(emoji => new OpenAIEmote(
-                emoji.Name,
-                emoji.Animated
-                    ? $"<a:{emoji.Name}:{emoji.Id}>"
-                    : $"<:{emoji.Name}:{emoji.Id}>"))
-            .ToArray();
     }
 }
