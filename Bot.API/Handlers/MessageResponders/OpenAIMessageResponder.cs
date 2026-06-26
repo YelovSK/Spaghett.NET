@@ -10,8 +10,6 @@ public partial class OpenAIMessageResponder(
     GatewayClient gatewayClient,
     OpenAIChatService chatService) : IMessageCreateResponder
 {
-    private const int CONTEXT_MESSAGE_COUNT = 10;
-
     [GeneratedRegex(@"<(?<name>[A-Za-z0-9_]+)>")]
     private static partial Regex EmoteRegex();
 
@@ -32,7 +30,7 @@ public partial class OpenAIMessageResponder(
     {
         var contextMessages = await GetContextMessagesAsync(message);
         var response = await chatService.GetResponseAsync(
-            NormalizeEmoteTokens(message.Content),
+            FormatContextMessageContent(message.Content, message.Attachments),
             contextMessages,
             BuildRequestContext(message));
 
@@ -88,11 +86,17 @@ public partial class OpenAIMessageResponder(
 
     private async Task<IReadOnlyList<OpenAIContextMessage>> GetContextMessagesAsync(Message message)
     {
+        var contextMessageCount = chatService.ContextMessageCount;
+        if (contextMessageCount == 0)
+        {
+            return [];
+        }
+
         var pagination = new PaginationProperties<ulong>
         {
             From = message.Id,
             Direction = PaginationDirection.Before,
-            BatchSize = CONTEXT_MESSAGE_COUNT,
+            BatchSize = contextMessageCount,
         };
 
         var messages = new List<OpenAIContextMessage>();
@@ -110,7 +114,7 @@ public partial class OpenAIMessageResponder(
                 contextMessage.Author.Username,
                 content));
 
-            if (messages.Count == CONTEXT_MESSAGE_COUNT)
+            if (messages.Count == contextMessageCount)
             {
                 break;
             }

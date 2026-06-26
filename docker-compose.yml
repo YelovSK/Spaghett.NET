@@ -12,6 +12,7 @@ services:
       OpenAI__Model: ${OPENAI_MODEL}
       OpenAI__Temperature: ${OPENAI_TEMPERATURE}
       OpenAI__MaxTokens: ${OPENAI_MAX_TOKENS}
+      OpenAI__ContextMessageCount: ${OPENAI_CONTEXT_MESSAGE_COUNT:-10}
       OpenAI__Tools__0__Type: ${OPENAI_TOOL_0_TYPE:-}
       OpenAI__Tools__1__Type: ${OPENAI_TOOL_1_TYPE:-}
     volumes:

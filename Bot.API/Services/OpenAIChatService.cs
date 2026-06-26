@@ -12,10 +12,21 @@ public class OpenAIChatService(
     IConfiguration configuration,
     ILogger<OpenAIChatService> logger)
 {
+    private const int DefaultContextMessageCount = 10;
+
     private static readonly JsonSerializerOptions JsonSerializerOptions = new(JsonSerializerDefaults.Web)
     {
         DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
     };
+
+    public int ContextMessageCount
+    {
+        get
+        {
+            var options = configuration.GetSection("OpenAI").Get<OpenAIOptions>();
+            return Math.Max(0, options?.ContextMessageCount ?? DefaultContextMessageCount);
+        }
+    }
 
     public bool IsEnabled
     {
@@ -49,16 +60,18 @@ public class OpenAIChatService(
             return null;
         }
 
+        var tools = BuildTools(options.Tools);
+
         using var request = new HttpRequestMessage(
             HttpMethod.Post,
             new Uri($"{NormalizeBaseUrl(options.BaseUrl).TrimEnd('/')}/chat/completions"))
         {
             Content = JsonContent.Create(new ChatCompletionRequest(
                 options.Model,
-                BuildMessages(prompt, BuildSystemPrompt(systemPrompt, options.Model, requestContext), contextMessages),
+                BuildMessages(prompt, BuildSystemPrompt(systemPrompt, options.Model, tools, requestContext), contextMessages),
                 options.Temperature,
                 options.MaxTokens,
-                BuildTools(options.Tools)),
+                tools),
                 options: JsonSerializerOptions),
         };
 
@@ -164,7 +177,11 @@ public class OpenAIChatService(
         return messages;
     }
 
-    private static string BuildSystemPrompt(string systemPrompt, string model, OpenAIRequestContext? requestContext)
+    private static string BuildSystemPrompt(
+        string systemPrompt,
+        string model,
+        IReadOnlyList<ChatTool>? tools,
+        OpenAIRequestContext? requestContext)
     {
         var contextLines = new List<string>
         {
@@ -172,6 +189,7 @@ public class OpenAIChatService(
             "Runtime context:",
             $"- Model: {model}",
             $"- Current UTC time: {DateTimeOffset.UtcNow:yyyy-MM-dd HH:mm:ss 'UTC'}",
+            $"- Available tools: {FormatAvailableTools(tools)}",
         };
 
         if (!string.IsNullOrWhiteSpace(requestContext?.ChannelName))
@@ -190,6 +208,7 @@ public class OpenAIChatService(
         public string? SystemPromptPath { get; init; }
         public double? Temperature { get; init; }
         public int? MaxTokens { get; init; }
+        public int? ContextMessageCount { get; init; }
         public IReadOnlyList<ChatToolOptions>? Tools { get; init; }
     }
 
@@ -230,6 +249,11 @@ public class OpenAIChatService(
 
         return tools is { Length: > 0 } ? tools : null;
     }
+
+    private static string FormatAvailableTools(IReadOnlyList<ChatTool>? tools) =>
+        tools is { Count: > 0 }
+            ? string.Join(", ", tools.Select(tool => tool.Type))
+            : "none";
 }
 
 public sealed record OpenAIContextMessage(DateTimeOffset SentAt, string AuthorName, string Content);
