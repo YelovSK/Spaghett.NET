@@ -1,5 +1,6 @@
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
+using System.Text.Json;
 using System.Text.Json.Serialization;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
@@ -11,6 +12,11 @@ public class OpenAIChatService(
     IConfiguration configuration,
     ILogger<OpenAIChatService> logger)
 {
+    private static readonly JsonSerializerOptions JsonSerializerOptions = new(JsonSerializerDefaults.Web)
+    {
+        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
+    };
+
     public bool IsEnabled
     {
         get
@@ -50,7 +56,9 @@ public class OpenAIChatService(
                 options.Model,
                 BuildMessages(prompt, systemPrompt, contextMessages),
                 options.Temperature,
-                options.MaxTokens)),
+                options.MaxTokens,
+                BuildTools(options.Tools)),
+                options: JsonSerializerOptions),
         };
 
         if (!string.IsNullOrWhiteSpace(options.ApiKey))
@@ -163,17 +171,27 @@ public class OpenAIChatService(
         public string? SystemPromptPath { get; init; }
         public double? Temperature { get; init; }
         public int? MaxTokens { get; init; }
+        public IReadOnlyList<ChatToolOptions>? Tools { get; init; }
     }
 
     private sealed record ChatCompletionRequest(
         [property: JsonPropertyName("model")] string Model,
         [property: JsonPropertyName("messages")] IReadOnlyList<ChatMessage> Messages,
         [property: JsonPropertyName("temperature")] double? Temperature,
-        [property: JsonPropertyName("max_tokens")] int? MaxTokens);
+        [property: JsonPropertyName("max_tokens")] int? MaxTokens,
+        [property: JsonPropertyName("tools")] IReadOnlyList<ChatTool>? Tools);
 
     private sealed record ChatMessage(
         [property: JsonPropertyName("role")] string Role,
         [property: JsonPropertyName("content")] string Content);
+
+    private sealed record ChatTool(
+        [property: JsonPropertyName("type")] string Type);
+
+    private sealed class ChatToolOptions
+    {
+        public string? Type { get; init; }
+    }
 
     private sealed record ChatCompletionResponse(
         [property: JsonPropertyName("choices")] IReadOnlyList<ChatChoice> Choices);
@@ -183,6 +201,16 @@ public class OpenAIChatService(
 
     private static string FormatContextMessage(OpenAIContextMessage message) =>
         $"[{message.SentAt.ToUniversalTime():yyyy-MM-dd HH:mm:ss 'UTC'}] {message.AuthorName}: {message.Content}";
+
+    private static IReadOnlyList<ChatTool>? BuildTools(IReadOnlyList<ChatToolOptions>? toolOptions)
+    {
+        var tools = toolOptions?
+            .Where(tool => !string.IsNullOrWhiteSpace(tool.Type))
+            .Select(tool => new ChatTool(tool.Type!))
+            .ToArray();
+
+        return tools is { Length: > 0 } ? tools : null;
+    }
 }
 
 public sealed record OpenAIContextMessage(DateTimeOffset SentAt, string AuthorName, string Content);
