@@ -13,6 +13,8 @@ public class MessageCreateHandler(
     GatewayClient gatewayClient,
     IEnumerable<IMessageCreateResponder> responders) : IMessageCreateGatewayHandler
 {
+    private static readonly TimeSpan TypingRefreshInterval = TimeSpan.FromSeconds(8);
+
     public async ValueTask HandleAsync(Message message)
     {
         await IncrementMessageCountAsync(message.Author);
@@ -30,14 +32,23 @@ public class MessageCreateHandler(
                 continue;
             }
 
-            await gatewayClient.Rest.TriggerTypingStateAsync(message.ChannelId);
-            var response = await responder.GetResponseAsync(message);
+            MessageCreateResponse? response = null;
+            await RunWithTypingIndicatorAsync(
+                message.ChannelId,
+                async () =>
+                {
+                    response = await responder.GetResponseAsync(message);
+
+                    if (response is not null)
+                    {
+                        await SendResponseAsync(message, response);
+                    }
+                });
+
             if (response is null)
             {
                 continue;
             }
-
-            await SendResponseAsync(message, response);
 
             if (response.StopProcessing)
             {
@@ -81,4 +92,37 @@ public class MessageCreateHandler(
         response.Length <= 2000
             ? response
             : response[..1997] + "...";
+
+    private async Task RunWithTypingIndicatorAsync(ulong channelId, Func<Task> action)
+    {
+        using var cancellationTokenSource = new CancellationTokenSource();
+        var typingTask = RefreshTypingIndicatorAsync(channelId, cancellationTokenSource.Token);
+
+        try
+        {
+            await action();
+        }
+        finally
+        {
+            await cancellationTokenSource.CancelAsync();
+
+            try
+            {
+                await typingTask;
+            }
+            catch (OperationCanceledException)
+            {
+                // Expected when the guarded action completes before the next refresh.
+            }
+        }
+    }
+
+    private async Task RefreshTypingIndicatorAsync(ulong channelId, CancellationToken cancellationToken)
+    {
+        while (!cancellationToken.IsCancellationRequested)
+        {
+            await gatewayClient.Rest.TriggerTypingStateAsync(channelId);
+            await Task.Delay(TypingRefreshInterval, cancellationToken);
+        }
+    }
 }
