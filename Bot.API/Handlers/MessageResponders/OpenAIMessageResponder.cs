@@ -1,5 +1,6 @@
 using System.Text.RegularExpressions;
 using Bot.API.Services;
+using Microsoft.Extensions.Logging;
 using NetCord;
 using NetCord.Gateway;
 using NetCord.Rest;
@@ -8,6 +9,7 @@ namespace Bot.API.Handlers.MessageResponders;
 
 public partial class OpenAIMessageResponder(
     GatewayClient gatewayClient,
+    ILogger<OpenAIMessageResponder> logger,
     OpenAIChatService chatService) : IMessageCreateResponder
 {
     [GeneratedRegex(@"<(?<name>[A-Za-z0-9_]+)>")]
@@ -28,14 +30,23 @@ public partial class OpenAIMessageResponder(
 
     public async ValueTask<MessageCreateResponse?> GetResponseAsync(Message message)
     {
-        var contextMessages = await GetContextMessagesAsync(message);
+        var messageContext = await GetContextMessagesAsync(message);
+        var latestImageInput = GetLatestImageInput(message.Attachments, messageContext.ImageCandidates);
         var response = await chatService.GetResponseAsync(
             FormatContextMessageContent(message.Content, message.Attachments),
-            contextMessages,
-            BuildRequestContext(message));
+            messageContext.Messages,
+            BuildRequestContext(message),
+            latestImageInput is null ? null : [latestImageInput]);
 
         if (string.IsNullOrWhiteSpace(response))
         {
+            logger.LogWarning(
+                "OpenAI responder produced no response. ChannelId: {ChannelId}, MessageId: {MessageId}, AuthorId: {AuthorId}, Prompt: {Prompt}",
+                message.ChannelId,
+                message.Id,
+                message.Author.Id,
+                FormatContextMessageContent(message.Content, message.Attachments));
+
             return new MessageCreateResponse(MessageResponseType.ChannelMessage, "OpenAI-compatible chat did not answer", true);
         }
 
@@ -84,12 +95,12 @@ public partial class OpenAIMessageResponder(
                 : match.Value);
     }
 
-    private async Task<IReadOnlyList<OpenAIContextMessage>> GetContextMessagesAsync(Message message)
+    private async Task<OpenAIMessageContext> GetContextMessagesAsync(Message message)
     {
         var contextMessageCount = chatService.ContextMessageCount;
         if (contextMessageCount == 0)
         {
-            return [];
+            return new OpenAIMessageContext([], []);
         }
 
         var pagination = new PaginationProperties<ulong>
@@ -100,9 +111,12 @@ public partial class OpenAIMessageResponder(
         };
 
         var messages = new List<OpenAIContextMessage>();
+        var imageCandidates = new List<OpenAIImageCandidate>();
 
         await foreach (var contextMessage in gatewayClient.Rest.GetMessagesAsync(message.ChannelId, pagination))
         {
+            imageCandidates.AddRange(GetImageCandidates(contextMessage.Attachments));
+
             var content = FormatContextMessageContent(contextMessage.Content, contextMessage.Attachments);
             if (string.IsNullOrWhiteSpace(content))
             {
@@ -121,7 +135,7 @@ public partial class OpenAIMessageResponder(
         }
 
         messages.Reverse();
-        return messages;
+        return new OpenAIMessageContext(messages, imageCandidates);
     }
 
     private static string NormalizeEmoteTokens(string messageContent) =>
@@ -184,4 +198,31 @@ public partial class OpenAIMessageResponder(
 
         return string.Join(", ", details);
     }
+
+    private static OpenAIImageInput? GetLatestImageInput(
+        IReadOnlyList<Attachment> currentMessageAttachments,
+        IReadOnlyList<OpenAIImageCandidate> contextImageCandidates)
+    {
+        var latestImage = GetImageCandidates(currentMessageAttachments)
+            .Concat(contextImageCandidates)
+            .MaxBy(candidate => candidate.CreatedAt);
+
+        return latestImage is null ? null : new OpenAIImageInput(latestImage.Url);
+    }
+
+    private static IEnumerable<OpenAIImageCandidate> GetImageCandidates(IReadOnlyList<Attachment> attachments) =>
+        attachments
+            .Where(IsImageAttachment)
+            .Where(attachment => !string.IsNullOrWhiteSpace(attachment.Url))
+            .Select(attachment => new OpenAIImageCandidate(attachment.CreatedAt, attachment.Url));
+
+    private static bool IsImageAttachment(Attachment attachment) =>
+        attachment is ImageAttachment ||
+        attachment.ContentType?.StartsWith("image/", StringComparison.InvariantCultureIgnoreCase) == true;
+
+    private sealed record OpenAIMessageContext(
+        IReadOnlyList<OpenAIContextMessage> Messages,
+        IReadOnlyList<OpenAIImageCandidate> ImageCandidates);
+
+    private sealed record OpenAIImageCandidate(DateTimeOffset CreatedAt, string Url);
 }

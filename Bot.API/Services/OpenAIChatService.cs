@@ -2,14 +2,14 @@ using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Text.Json;
 using System.Text.Json.Serialization;
-using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 
 namespace Bot.API.Services;
 
 public class OpenAIChatService(
     HttpClient httpClient,
-    IConfiguration configuration,
+    OpenAIOptions options,
+    IOpenAIModelCapabilityResolver modelCapabilityResolver,
     ILogger<OpenAIChatService> logger)
 {
     private const int DefaultContextMessageCount = 10;
@@ -19,21 +19,13 @@ public class OpenAIChatService(
         DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
     };
 
-    public int ContextMessageCount
-    {
-        get
-        {
-            var options = configuration.GetSection("OpenAI").Get<OpenAIOptions>();
-            return Math.Max(0, options?.ContextMessageCount ?? DefaultContextMessageCount);
-        }
-    }
+    public int ContextMessageCount => Math.Max(0, options.ContextMessageCount ?? DefaultContextMessageCount);
 
     public bool IsEnabled
     {
         get
         {
-            var options = configuration.GetSection("OpenAI").Get<OpenAIOptions>();
-            return !string.IsNullOrWhiteSpace(options?.BaseUrl) &&
+            return !string.IsNullOrWhiteSpace(options.BaseUrl) &&
                    !string.IsNullOrWhiteSpace(options.Model) &&
                    !string.IsNullOrWhiteSpace(options.SystemPromptPath);
         }
@@ -43,24 +35,30 @@ public class OpenAIChatService(
         string prompt,
         IReadOnlyList<OpenAIContextMessage>? contextMessages = null,
         OpenAIRequestContext? requestContext = null,
+        IReadOnlyList<OpenAIImageInput>? imageInputs = null,
         CancellationToken cancellationToken = default)
     {
-        var options = configuration.GetSection("OpenAI").Get<OpenAIOptions>() ?? new OpenAIOptions();
         if (string.IsNullOrWhiteSpace(options.BaseUrl) ||
             string.IsNullOrWhiteSpace(options.Model) ||
             string.IsNullOrWhiteSpace(options.SystemPromptPath))
         {
-            logger.LogInformation("OpenAI-compatible chat is not configured. Set OpenAI:BaseUrl, OpenAI:Model, and OpenAI:SystemPromptPath to enable it.");
+            logger.LogWarning(
+                "OpenAI-compatible chat is not configured. BaseUrl configured: {HasBaseUrl}, Model configured: {HasModel}, SystemPromptPath configured: {HasSystemPromptPath}.",
+                !string.IsNullOrWhiteSpace(options.BaseUrl),
+                !string.IsNullOrWhiteSpace(options.Model),
+                !string.IsNullOrWhiteSpace(options.SystemPromptPath));
             return null;
         }
 
         var systemPrompt = await ReadSystemPromptAsync(options.SystemPromptPath, cancellationToken);
         if (string.IsNullOrWhiteSpace(systemPrompt))
         {
+            logger.LogWarning("OpenAI-compatible chat skipped because the system prompt was empty or could not be read.");
             return null;
         }
 
         var tools = BuildTools(options.Tools);
+        var supportedImageInputs = await GetSupportedImageInputsAsync(options.Model, imageInputs, cancellationToken);
 
         using var request = new HttpRequestMessage(
             HttpMethod.Post,
@@ -68,7 +66,7 @@ public class OpenAIChatService(
         {
             Content = JsonContent.Create(new ChatCompletionRequest(
                 options.Model,
-                BuildMessages(prompt, BuildSystemPrompt(systemPrompt, options.Model, tools, requestContext), contextMessages),
+                BuildMessages(prompt, BuildSystemPrompt(systemPrompt, options.Model, tools, requestContext), contextMessages, supportedImageInputs),
                 options.Temperature,
                 options.MaxTokens,
                 tools),
@@ -86,26 +84,36 @@ public class OpenAIChatService(
 
             if (!response.IsSuccessStatusCode)
             {
-                logger.LogWarning("OpenAI-compatible chat request failed with status code {StatusCode}.", response.StatusCode);
+                var responseBody = await response.Content.ReadAsStringAsync(cancellationToken);
+                logger.LogWarning(
+                    "OpenAI-compatible chat request failed with status code {StatusCode}. Response body: {ResponseBody}",
+                    response.StatusCode,
+                    responseBody);
                 return null;
             }
 
-            var completion = await response.Content.ReadFromJsonAsync<ChatCompletionResponse>(cancellationToken);
+            var completion = await response.Content.ReadFromJsonAsync<ChatCompletionResponse>(
+                JsonSerializerOptions,
+                cancellationToken);
             var content = completion?.Choices.FirstOrDefault()?.Message.Content?.Trim();
 
             if (string.IsNullOrWhiteSpace(content))
             {
-                logger.LogWarning("OpenAI-compatible chat returned no message content.");
+                logger.LogWarning(
+                    "OpenAI-compatible chat returned no message content. Choices: {ChoiceCount}.",
+                    completion?.Choices.Count ?? 0);
             }
 
             return content;
         }
-        catch (HttpRequestException)
+        catch (HttpRequestException ex)
         {
+            logger.LogWarning(ex, "OpenAI-compatible chat request failed.");
             return null;
         }
-        catch (TaskCanceledException)
+        catch (TaskCanceledException ex)
         {
+            logger.LogWarning(ex, "OpenAI-compatible chat request timed out or was canceled.");
             return null;
         }
     }
@@ -120,6 +128,30 @@ public class OpenAIChatService(
         }
 
         return trimmedBaseUrl + "/v1";
+    }
+
+    private async Task<IReadOnlyList<OpenAIImageInput>?> GetSupportedImageInputsAsync(
+        string model,
+        IReadOnlyList<OpenAIImageInput>? imageInputs,
+        CancellationToken cancellationToken)
+    {
+        if (imageInputs is not { Count: > 0 })
+        {
+            return null;
+        }
+
+        var supportsVision = await modelCapabilityResolver.SupportsAsync(
+            new OpenAIModelCapabilityRequest(options.BaseUrl, options.ApiKey, model),
+            OpenAIModelCapability.Vision,
+            cancellationToken);
+
+        if (supportsVision)
+        {
+            return imageInputs;
+        }
+
+        logger.LogInformation("Skipping image input because model {Model} does not have the {Capability} capability.", model, OpenAIModelCapability.Vision);
+        return null;
     }
 
     private async Task<string?> ReadSystemPromptAsync(string systemPromptPath, CancellationToken cancellationToken)
@@ -155,7 +187,8 @@ public class OpenAIChatService(
     private static IReadOnlyList<ChatMessage> BuildMessages(
         string prompt,
         string? systemPrompt,
-        IReadOnlyList<OpenAIContextMessage>? contextMessages)
+        IReadOnlyList<OpenAIContextMessage>? contextMessages,
+        IReadOnlyList<OpenAIImageInput>? imageInputs)
     {
         var messages = new List<ChatMessage>();
 
@@ -173,7 +206,7 @@ public class OpenAIChatService(
                     ["Recent Discord messages before the user's question:", .. contextMessages.Select(FormatContextMessage)])));
         }
 
-        messages.Add(new ChatMessage("user", prompt));
+        messages.Add(new ChatMessage("user", BuildUserMessageContent(prompt, imageInputs)));
         return messages;
     }
 
@@ -200,18 +233,6 @@ public class OpenAIChatService(
         return systemPrompt.TrimEnd() + Environment.NewLine + string.Join(Environment.NewLine, contextLines);
     }
 
-    private sealed class OpenAIOptions
-    {
-        public string? BaseUrl { get; init; }
-        public string? ApiKey { get; init; }
-        public string? Model { get; init; }
-        public string? SystemPromptPath { get; init; }
-        public double? Temperature { get; init; }
-        public int? MaxTokens { get; init; }
-        public int? ContextMessageCount { get; init; }
-        public IReadOnlyList<ChatToolOptions>? Tools { get; init; }
-    }
-
     private sealed record ChatCompletionRequest(
         [property: JsonPropertyName("model")] string Model,
         [property: JsonPropertyName("messages")] IReadOnlyList<ChatMessage> Messages,
@@ -221,26 +242,32 @@ public class OpenAIChatService(
 
     private sealed record ChatMessage(
         [property: JsonPropertyName("role")] string Role,
-        [property: JsonPropertyName("content")] string Content);
+        [property: JsonPropertyName("content")] object Content);
+
+    private sealed record ChatContentPart(
+        [property: JsonPropertyName("type")] string Type,
+        [property: JsonPropertyName("text")] string? Text = null,
+        [property: JsonPropertyName("image_url")] ChatImageUrl? ImageUrl = null);
+
+    private sealed record ChatImageUrl(
+        [property: JsonPropertyName("url")] string Url);
 
     private sealed record ChatTool(
         [property: JsonPropertyName("type")] string Type);
-
-    private sealed class ChatToolOptions
-    {
-        public string? Type { get; init; }
-    }
 
     private sealed record ChatCompletionResponse(
         [property: JsonPropertyName("choices")] IReadOnlyList<ChatChoice> Choices);
 
     private sealed record ChatChoice(
-        [property: JsonPropertyName("message")] ChatMessage Message);
+        [property: JsonPropertyName("message")] ChatCompletionResponseMessage Message);
+
+    private sealed record ChatCompletionResponseMessage(
+        [property: JsonPropertyName("content")] string? Content);
 
     private static string FormatContextMessage(OpenAIContextMessage message) =>
         $"[{message.SentAt.ToUniversalTime():yyyy-MM-dd HH:mm:ss 'UTC'}] {message.AuthorName}: {message.Content}";
 
-    private static IReadOnlyList<ChatTool>? BuildTools(IReadOnlyList<ChatToolOptions>? toolOptions)
+    private static IReadOnlyList<ChatTool>? BuildTools(IReadOnlyList<OpenAIChatToolOptions>? toolOptions)
     {
         var tools = toolOptions?
             .Where(tool => !string.IsNullOrWhiteSpace(tool.Type))
@@ -254,6 +281,28 @@ public class OpenAIChatService(
         tools is { Count: > 0 }
             ? string.Join(", ", tools.Select(tool => tool.Type))
             : "none";
+
+    private static object BuildUserMessageContent(string prompt, IReadOnlyList<OpenAIImageInput>? imageInputs)
+    {
+        var validImageInputs = imageInputs?
+            .Where(imageInput => !string.IsNullOrWhiteSpace(imageInput.Url))
+            .ToArray();
+
+        if (validImageInputs is not { Length: > 0 })
+        {
+            return prompt;
+        }
+
+        var contentParts = new List<ChatContentPart>
+        {
+            new("text", Text: prompt),
+        };
+
+        contentParts.AddRange(validImageInputs
+            .Select(imageInput => new ChatContentPart("image_url", ImageUrl: new ChatImageUrl(imageInput.Url))));
+
+        return contentParts;
+    }
 }
 
 public sealed record OpenAIContextMessage(DateTimeOffset SentAt, string AuthorName, string Content);
@@ -264,3 +313,5 @@ public sealed record OpenAIRequestContext(
     string? ChannelName,
     string? ChannelTopic,
     string AuthorName);
+
+public sealed record OpenAIImageInput(string Url);
