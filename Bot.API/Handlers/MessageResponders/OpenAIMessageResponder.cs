@@ -1,5 +1,6 @@
 using System.Text.RegularExpressions;
 using Bot.API.Services;
+using NetCord;
 using NetCord.Gateway;
 using NetCord.Rest;
 
@@ -95,7 +96,8 @@ public partial class OpenAIMessageResponder(
 
         await foreach (var contextMessage in gatewayClient.Rest.GetMessagesAsync(message.ChannelId, pagination))
         {
-            if (string.IsNullOrWhiteSpace(contextMessage.Content))
+            var content = FormatContextMessageContent(contextMessage.Content, contextMessage.Attachments);
+            if (string.IsNullOrWhiteSpace(content))
             {
                 continue;
             }
@@ -103,7 +105,7 @@ public partial class OpenAIMessageResponder(
             messages.Add(new OpenAIContextMessage(
                 contextMessage.CreatedAt,
                 contextMessage.Author.Username,
-                NormalizeEmoteTokens(contextMessage.Content)));
+                content));
 
             if (messages.Count == CONTEXT_MESSAGE_COUNT)
             {
@@ -117,4 +119,48 @@ public partial class OpenAIMessageResponder(
 
     private static string NormalizeEmoteTokens(string messageContent) =>
         DiscordEmoteRegex().Replace(messageContent, match => $"<{match.Groups["name"].Value}>");
+
+    private static string FormatContextMessageContent(string content, IReadOnlyList<Attachment> attachments)
+    {
+        var parts = new List<string>();
+
+        if (!string.IsNullOrWhiteSpace(content))
+        {
+            parts.Add(NormalizeEmoteTokens(content));
+        }
+
+        if (attachments.Count > 0)
+        {
+            parts.Add(FormatAttachments(attachments));
+        }
+
+        return string.Join(" ", parts);
+    }
+
+    private static string FormatAttachments(IReadOnlyList<Attachment> attachments)
+    {
+        var attachmentSummaries = attachments.Select(FormatAttachment);
+        return $"[attachments: {attachments.Count}; {string.Join("; ", attachmentSummaries)}]";
+    }
+
+    private static string FormatAttachment(Attachment attachment)
+    {
+        var kind = attachment switch
+        {
+            ImageAttachment => "image",
+            VoiceAttachment => "voice",
+            _ when attachment.ContentType?.StartsWith("image/", StringComparison.InvariantCultureIgnoreCase) == true => "image",
+            _ when attachment.ContentType?.StartsWith("video/", StringComparison.InvariantCultureIgnoreCase) == true => "video",
+            _ => "file",
+        };
+
+        var details = new List<string> { kind };
+
+        if (!string.IsNullOrWhiteSpace(attachment.FileName))
+        {
+            details.Add(attachment.FileName);
+        }
+
+        return string.Join(", ", details);
+    }
 }
