@@ -19,9 +19,10 @@ public partial class OpenAIMessageResponder(
 
     public ValueTask<bool> ShouldRespondAsync(Message message)
     {
-        var shouldRespond =
-            chatService.IsEnabled &&
-            message.Content.StartsWith("spaghett", StringComparison.InvariantCultureIgnoreCase);
+        var hasMention = message.MentionedUsers.Any(user => user.Id == gatewayClient.Id);
+        var hasName = message.Content.StartsWith("spaghett", StringComparison.InvariantCultureIgnoreCase);
+
+        var shouldRespond = chatService.IsEnabled && (hasMention || hasName);
 
         return ValueTask.FromResult(shouldRespond);
     }

@@ -30,7 +30,6 @@ builder.Services
     .AddSingleton<OpenAIChatService>()
     .AddSingleton<IMessageCreateResponder, OpenAIMessageResponder>()
     .AddSingleton<IMessageCreateResponder, SpecialWordResponder>()
-    .AddSingleton<IMessageCreateResponder, BotMentionResponder>()
     .AddSingleton<IMessageCreateResponder, EveryoneMentionResponder>()
     .AddSingleton<IMessageCreateResponder, MessageLengthResponder>()
     .AddSingleton<IMessageCreateResponder, CapsLockResponder>()
