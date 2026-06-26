@@ -31,6 +31,7 @@ public class OpenAIChatService(
     public async Task<string?> GetResponseAsync(
         string prompt,
         IReadOnlyList<OpenAIContextMessage>? contextMessages = null,
+        OpenAIRequestContext? requestContext = null,
         CancellationToken cancellationToken = default)
     {
         var options = configuration.GetSection("OpenAI").Get<OpenAIOptions>() ?? new OpenAIOptions();
@@ -54,7 +55,7 @@ public class OpenAIChatService(
         {
             Content = JsonContent.Create(new ChatCompletionRequest(
                 options.Model,
-                BuildMessages(prompt, systemPrompt, contextMessages),
+                BuildMessages(prompt, BuildSystemPrompt(systemPrompt, options.Model, requestContext), contextMessages),
                 options.Temperature,
                 options.MaxTokens,
                 BuildTools(options.Tools)),
@@ -163,6 +164,24 @@ public class OpenAIChatService(
         return messages;
     }
 
+    private static string BuildSystemPrompt(string systemPrompt, string model, OpenAIRequestContext? requestContext)
+    {
+        var contextLines = new List<string>
+        {
+            string.Empty,
+            "Runtime context:",
+            $"- Model: {model}",
+            $"- Current UTC time: {DateTimeOffset.UtcNow:yyyy-MM-dd HH:mm:ss 'UTC'}",
+        };
+
+        if (!string.IsNullOrWhiteSpace(requestContext?.ChannelName))
+        {
+            contextLines.Add($"- Discord channel: #{requestContext.ChannelName}");
+        }
+
+        return systemPrompt.TrimEnd() + Environment.NewLine + string.Join(Environment.NewLine, contextLines);
+    }
+
     private sealed class OpenAIOptions
     {
         public string? BaseUrl { get; init; }
@@ -214,3 +233,10 @@ public class OpenAIChatService(
 }
 
 public sealed record OpenAIContextMessage(DateTimeOffset SentAt, string AuthorName, string Content);
+
+public sealed record OpenAIRequestContext(
+    string? GuildName,
+    ulong ChannelId,
+    string? ChannelName,
+    string? ChannelTopic,
+    string AuthorName);

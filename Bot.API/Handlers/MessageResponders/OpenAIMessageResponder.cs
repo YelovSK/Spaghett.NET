@@ -31,7 +31,10 @@ public partial class OpenAIMessageResponder(
     public async ValueTask<MessageCreateResponse?> GetResponseAsync(Message message)
     {
         var contextMessages = await GetContextMessagesAsync(message);
-        var response = await chatService.GetResponseAsync(NormalizeEmoteTokens(message.Content), contextMessages);
+        var response = await chatService.GetResponseAsync(
+            NormalizeEmoteTokens(message.Content),
+            contextMessages,
+            BuildRequestContext(message));
 
         if (string.IsNullOrWhiteSpace(response))
         {
@@ -119,6 +122,20 @@ public partial class OpenAIMessageResponder(
 
     private static string NormalizeEmoteTokens(string messageContent) =>
         DiscordEmoteRegex().Replace(messageContent, match => $"<{match.Groups["name"].Value}>");
+
+    private static OpenAIRequestContext BuildRequestContext(Message message)
+    {
+        var channelName = message.Channel is INamedChannel namedChannel ? namedChannel.Name : null;
+        var channelTopic = message.Channel is TextGuildChannel textGuildChannel ? textGuildChannel.Topic : null;
+        var authorName = message.Author.GlobalName ?? message.Author.Username;
+
+        return new OpenAIRequestContext(
+            message.Guild?.Name,
+            message.ChannelId,
+            channelName,
+            channelTopic,
+            authorName);
+    }
 
     private static string FormatContextMessageContent(string content, IReadOnlyList<Attachment> attachments)
     {
