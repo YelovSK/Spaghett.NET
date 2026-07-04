@@ -18,8 +18,6 @@ public class OpenAIChatService(
         DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
     };
 
-    public int ContextMessageCount => runtimeSettings.ContextMessageCount;
-
     public bool IsEnabled
     {
         get
@@ -294,16 +292,36 @@ public class OpenAIChatService(
             return prompt;
         }
 
-        var contentParts = new List<ChatContentPart>
-        {
-            new("text", Text: prompt),
-        };
+        var contentParts = new List<ChatContentPart> { new("text", Text: prompt) };
 
-        contentParts.AddRange(validImageInputs
-            .Select(imageInput => new ChatContentPart("image_url", ImageUrl: new ChatImageUrl(imageInput.Url))));
+        for (var i = 0; i < validImageInputs.Length; i++)
+        {
+            var imageInput = validImageInputs[i];
+            contentParts.Add(new ChatContentPart("text", Text: FormatImageInputContext(imageInput, i + 1)));
+            contentParts.Add(new ChatContentPart("image_url", ImageUrl: new ChatImageUrl(imageInput.Url)));
+        }
 
         return contentParts;
     }
+
+    private static string FormatImageInputContext(OpenAIImageInput imageInput, int index)
+    {
+        var lines = new List<string>
+        {
+            $"Image {index} is attached to this Discord message:",
+            $"[{imageInput.SentAt.ToUniversalTime():yyyy-MM-dd HH:mm:ss 'UTC'}] {imageInput.AuthorName}: {FormatImageMessageContent(imageInput.MessageContent)}",
+        };
+
+        if (!string.IsNullOrWhiteSpace(imageInput.FileName))
+        {
+            lines.Add($"Attachment filename: {imageInput.FileName}");
+        }
+
+        return string.Join(Environment.NewLine, lines);
+    }
+
+    private static string FormatImageMessageContent(string? messageContent) =>
+        string.IsNullOrWhiteSpace(messageContent) ? "(no message text)" : messageContent;
 }
 
 public sealed record OpenAIContextMessage(DateTimeOffset SentAt, string AuthorName, string Content);
@@ -315,4 +333,9 @@ public sealed record OpenAIRequestContext(
     string? ChannelTopic,
     string AuthorName);
 
-public sealed record OpenAIImageInput(string Url);
+public sealed record OpenAIImageInput(
+    string Url,
+    DateTimeOffset SentAt,
+    string AuthorName,
+    string? MessageContent,
+    string? FileName);

@@ -10,6 +10,7 @@ namespace Bot.API.Handlers.MessageResponders;
 public partial class OpenAIMessageResponder(
     GatewayClient gatewayClient,
     ILogger<OpenAIMessageResponder> logger,
+    OpenAIChatRuntimeSettings runtimeSettings,
     OpenAIChatService chatService) : IMessageCreateResponder
 {
     [GeneratedRegex(@"<(?<name>[A-Za-z0-9_]+)>")]
@@ -31,12 +32,12 @@ public partial class OpenAIMessageResponder(
     public async ValueTask<MessageCreateResponse?> GetResponseAsync(Message message)
     {
         var messageContext = await GetContextMessagesAsync(message);
-        var latestImageInput = GetLatestImageInput(message.Attachments, messageContext.ImageCandidates);
+        var imageInputs = BuildImageInputs(message, messageContext.ImageInputs);
         var response = await chatService.GetResponseAsync(
             FormatContextMessageContent(message.Content, message.Attachments),
             messageContext.Messages,
             BuildRequestContext(message),
-            latestImageInput is null ? null : [latestImageInput]);
+            imageInputs);
 
         if (string.IsNullOrWhiteSpace(response))
         {
@@ -97,7 +98,7 @@ public partial class OpenAIMessageResponder(
 
     private async Task<OpenAIMessageContext> GetContextMessagesAsync(Message message)
     {
-        var contextMessageCount = chatService.ContextMessageCount;
+        var contextMessageCount = runtimeSettings.ContextMessageCount;
         if (contextMessageCount == 0)
         {
             return new OpenAIMessageContext([], []);
@@ -111,11 +112,11 @@ public partial class OpenAIMessageResponder(
         };
 
         var messages = new List<OpenAIContextMessage>();
-        var imageCandidates = new List<OpenAIImageCandidate>();
+        var imageInputs = new List<OpenAIImageInput>();
 
         await foreach (var contextMessage in gatewayClient.Rest.GetMessagesAsync(message.ChannelId, pagination))
         {
-            imageCandidates.AddRange(GetImageCandidates(contextMessage.Attachments));
+            imageInputs.AddRange(GetImageInputs(contextMessage));
 
             var content = FormatContextMessageContent(contextMessage.Content, contextMessage.Attachments);
             if (string.IsNullOrWhiteSpace(content))
@@ -125,7 +126,7 @@ public partial class OpenAIMessageResponder(
 
             messages.Add(new OpenAIContextMessage(
                 contextMessage.CreatedAt,
-                contextMessage.Author.Username,
+                GetAuthorName(contextMessage.Author),
                 content));
 
             if (messages.Count == contextMessageCount)
@@ -135,7 +136,7 @@ public partial class OpenAIMessageResponder(
         }
 
         messages.Reverse();
-        return new OpenAIMessageContext(messages, imageCandidates);
+        return new OpenAIMessageContext(messages, imageInputs.OrderBy(imageInput => imageInput.SentAt).ToArray());
     }
 
     private static string NormalizeEmoteTokens(string messageContent) =>
@@ -145,23 +146,23 @@ public partial class OpenAIMessageResponder(
     {
         var channelName = message.Channel is INamedChannel namedChannel ? namedChannel.Name : null;
         var channelTopic = message.Channel is TextGuildChannel textGuildChannel ? textGuildChannel.Topic : null;
-        var authorName = message.Author.GlobalName ?? message.Author.Username;
 
         return new OpenAIRequestContext(
             message.Guild?.Name,
             message.ChannelId,
             channelName,
             channelTopic,
-            authorName);
+            GetAuthorName(message.Author));
     }
 
     private static string FormatContextMessageContent(string content, IReadOnlyList<Attachment> attachments)
     {
         var parts = new List<string>();
+        var messageContent = FormatMessageTextContent(content);
 
-        if (!string.IsNullOrWhiteSpace(content))
+        if (!string.IsNullOrWhiteSpace(messageContent))
         {
-            parts.Add(NormalizeEmoteTokens(content));
+            parts.Add(messageContent);
         }
 
         if (attachments.Count > 0)
@@ -170,6 +171,12 @@ public partial class OpenAIMessageResponder(
         }
 
         return string.Join(" ", parts);
+    }
+
+    private static string? FormatMessageTextContent(string content)
+    {
+        var normalizedContent = NormalizeEmoteTokens(content).Trim();
+        return string.IsNullOrWhiteSpace(normalizedContent) ? null : normalizedContent;
     }
 
     private static string FormatAttachments(IReadOnlyList<Attachment> attachments)
@@ -199,30 +206,59 @@ public partial class OpenAIMessageResponder(
         return string.Join(", ", details);
     }
 
-    private static OpenAIImageInput? GetLatestImageInput(
-        IReadOnlyList<Attachment> currentMessageAttachments,
-        IReadOnlyList<OpenAIImageCandidate> contextImageCandidates)
+    private IReadOnlyList<OpenAIImageInput>? BuildImageInputs(
+        Message currentMessage,
+        IReadOnlyList<OpenAIImageInput> contextImageInputs)
     {
-        var latestImage = GetImageCandidates(currentMessageAttachments)
-            .Concat(contextImageCandidates)
-            .MaxBy(candidate => candidate.CreatedAt);
+        var currentImageInputs = GetImageInputs(currentMessage)
+            .Take(runtimeSettings.ContextImagesCount)
+            .ToArray();
+        var contextImageInputCount = Math.Max(0, runtimeSettings.ContextImagesCount - currentImageInputs.Length);
+        var recentContextImageInputs = contextImageInputs
+            .OrderByDescending(imageInput => imageInput.SentAt)
+            .Take(contextImageInputCount)
+            .OrderBy(imageInput => imageInput.SentAt)
+            .ToArray();
+        var imageInputs = recentContextImageInputs
+            .Concat(currentImageInputs)
+            .ToArray();
 
-        return latestImage is null ? null : new OpenAIImageInput(latestImage.Url);
+        return imageInputs.Length == 0 ? null : imageInputs;
     }
 
-    private static IEnumerable<OpenAIImageCandidate> GetImageCandidates(IReadOnlyList<Attachment> attachments) =>
-        attachments
+    private static IEnumerable<OpenAIImageInput> GetImageInputs(Message message) =>
+        GetImageInputs(message.CreatedAt, message.Author, message.Content, message.Attachments);
+
+    private static IEnumerable<OpenAIImageInput> GetImageInputs(RestMessage message) =>
+        GetImageInputs(message.CreatedAt, message.Author, message.Content, message.Attachments);
+
+    private static IEnumerable<OpenAIImageInput> GetImageInputs(
+        DateTimeOffset createdAt,
+        User author,
+        string content,
+        IReadOnlyList<Attachment> attachments)
+    {
+        var messageContent = FormatMessageTextContent(content);
+        var authorName = GetAuthorName(author);
+
+        return attachments
             .Where(IsImageAttachment)
             .Where(attachment => !string.IsNullOrWhiteSpace(attachment.Url))
-            .Select(attachment => new OpenAIImageCandidate(attachment.CreatedAt, attachment.Url));
+            .Select(attachment => new OpenAIImageInput(
+                attachment.Url,
+                createdAt,
+                authorName,
+                messageContent,
+                attachment.FileName));
+    }
 
     private static bool IsImageAttachment(Attachment attachment) =>
         attachment is ImageAttachment ||
         attachment.ContentType?.StartsWith("image/", StringComparison.InvariantCultureIgnoreCase) == true;
 
+    private static string GetAuthorName(User user) => user.GlobalName ?? user.Username;
+
     private sealed record OpenAIMessageContext(
         IReadOnlyList<OpenAIContextMessage> Messages,
-        IReadOnlyList<OpenAIImageCandidate> ImageCandidates);
-
-    private sealed record OpenAIImageCandidate(DateTimeOffset CreatedAt, string Url);
+        IReadOnlyList<OpenAIImageInput> ImageInputs);
 }
