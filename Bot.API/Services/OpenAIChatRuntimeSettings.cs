@@ -1,0 +1,12 @@
+namespace Bot.API.Services;
+
+public sealed class OpenAIChatRuntimeSettings(OpenAIOptions options)
+{
+    public string? Model { get; private set; } = options.Model;
+    public int ContextMessageCount { get; private set; } = options.ContextMessageCount ?? 10;
+
+    public void SetModel(string model) => Model = model;
+    public void ResetModel() => Model = options.Model;
+
+    public void SetContextMessageCount(int count) => ContextMessageCount = Math.Max(0, count);
+}

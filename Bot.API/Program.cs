@@ -27,9 +27,10 @@ builder.Services
     .AddApplicationCommands()
     .AddGatewayHandlers(typeof(Program).Assembly)
     .AddSingleton(builder.Configuration.GetSection("OpenAI").Get<OpenAIOptions>() ?? new OpenAIOptions())
+    .AddSingleton<OpenAIChatRuntimeSettings>()
     .AddSingleton(new HttpClient { Timeout = TimeSpan.FromMinutes(5) })
-    .AddSingleton<IOpenAIModelCapabilityProvider, OpenRouterModelCapabilityProvider>()
-    .AddSingleton<IOpenAIModelCapabilityResolver, OpenAIModelCapabilityResolver>()
+    .AddSingleton<IModelMetadataProvider, OpenRouterModelMetadataProvider>()
+    .AddSingleton<ModelMetadataResolver>()
     .AddSingleton<OpenAIChatService>()
     .AddSingleton<IMessageCreateResponder, OpenAIMessageResponder>()
     .AddSingleton<IMessageCreateResponder, SpecialWordResponder>()
@@ -52,6 +53,7 @@ var host = builder.Build();
 host.AddApplicationCommandModule<Bot.API.Modules.MiscModule>();
 host.AddApplicationCommandModule<Bot.API.Modules.ImageModule>();
 host.AddApplicationCommandModule<Bot.API.Modules.UserModule>();
+host.AddApplicationCommandModule<Bot.API.Modules.OpenAIModelModule>();
 
 if (OperatingSystem.IsWindows())
 {

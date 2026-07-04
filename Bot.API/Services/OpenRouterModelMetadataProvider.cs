@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Globalization;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Text.Json;
@@ -7,17 +8,17 @@ using Microsoft.Extensions.Logging;
 
 namespace Bot.API.Services;
 
-public sealed class OpenRouterModelCapabilityProvider(
+public sealed class OpenRouterModelMetadataProvider(
     HttpClient httpClient,
-    ILogger<OpenRouterModelCapabilityProvider> logger)
-    : IOpenAIModelCapabilityProvider
+    ILogger<OpenRouterModelMetadataProvider> logger)
+    : IModelMetadataProvider
 {
     private static readonly JsonSerializerOptions JsonSerializerOptions = new(JsonSerializerDefaults.Web);
     private static readonly TimeSpan CacheDuration = TimeSpan.FromHours(1);
 
-    private readonly ConcurrentDictionary<string, CacheEntry> _capabilitiesByCacheKey = new(StringComparer.InvariantCultureIgnoreCase);
+    private readonly ConcurrentDictionary<string, CacheEntry> _metadataByCacheKey = new(StringComparer.InvariantCultureIgnoreCase);
 
-    public bool CanHandle(OpenAIModelCapabilityRequest request)
+    public bool CanHandle(ModelMetadataRequest request)
     {
         if (string.IsNullOrWhiteSpace(request.BaseUrl))
         {
@@ -29,38 +30,46 @@ public sealed class OpenRouterModelCapabilityProvider(
                 uri.Host.EndsWith(".openrouter.ai", StringComparison.OrdinalIgnoreCase));
     }
 
-    public async Task<IReadOnlySet<OpenAIModelCapability>> GetCapabilitiesAsync(
-        OpenAIModelCapabilityRequest request,
+    public async Task<IReadOnlySet<ModelCapability>> GetCapabilitiesAsync(
+        ModelMetadataRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        var metadata = await GetModelMetadataAsync(request, cancellationToken);
+        return metadata?.Capabilities ?? new HashSet<ModelCapability>();
+    }
+
+    public async Task<ModelMetadata?> GetModelMetadataAsync(
+        ModelMetadataRequest request,
         CancellationToken cancellationToken = default)
     {
         if (string.IsNullOrWhiteSpace(request.BaseUrl) || string.IsNullOrWhiteSpace(request.Model))
         {
-            return new HashSet<OpenAIModelCapability>();
+            return null;
         }
 
         var cacheKey = BuildCacheKey(request.BaseUrl, request.Model);
         var now = DateTimeOffset.UtcNow;
 
-        if (_capabilitiesByCacheKey.TryGetValue(cacheKey, out var cachedCapabilities) &&
-            cachedCapabilities.ExpiresAt > now)
+        if (_metadataByCacheKey.TryGetValue(cacheKey, out var cachedMetadata) &&
+            cachedMetadata.ExpiresAt > now)
         {
-            return cachedCapabilities.Capabilities;
+            return cachedMetadata.Metadata;
         }
 
-        var modelMetadata = await GetModelMetadataAsync(request, cancellationToken);
-        if (modelMetadata?.Data is null)
+        var openRouterModel = await GetOpenRouterModelAsync(request, cancellationToken);
+        if (openRouterModel?.Data is null)
         {
-            return new HashSet<OpenAIModelCapability>();
+            return null;
         }
 
-        var capabilities = GetCapabilities(modelMetadata.Data, request.Model);
-        _capabilitiesByCacheKey[cacheKey] = new CacheEntry(capabilities, now.Add(CacheDuration));
+        var metadata = ToModelMetadata(openRouterModel.Data, request.Model);
+        _metadataByCacheKey[cacheKey] = new CacheEntry(metadata, now.Add(CacheDuration));
 
-        return capabilities;
+        return metadata;
     }
 
-    private async Task<OpenRouterModelResponse?> GetModelMetadataAsync(
-        OpenAIModelCapabilityRequest request,
+    private async Task<OpenRouterModelResponse?> GetOpenRouterModelAsync(
+        ModelMetadataRequest request,
         CancellationToken cancellationToken)
     {
         var modelUri = new Uri($"{NormalizeBaseUrl(request.BaseUrl!).TrimEnd('/')}/model/{request.Model}");
@@ -90,7 +99,18 @@ public sealed class OpenRouterModelCapabilityProvider(
             cancellationToken);
     }
 
-    private IReadOnlySet<OpenAIModelCapability> GetCapabilities(OpenRouterModelData modelData, string model)
+    private ModelMetadata ToModelMetadata(OpenRouterModelData modelData, string model)
+    {
+        return new ModelMetadata(
+            modelData.Id ?? model,
+            modelData.Name,
+            modelData.ContextLength,
+            ParsePricePerMillionTokens(modelData.Pricing?.Prompt),
+            ParsePricePerMillionTokens(modelData.Pricing?.Completion),
+            GetCapabilities(modelData, model));
+    }
+
+    private IReadOnlySet<ModelCapability> GetCapabilities(OpenRouterModelData modelData, string model)
     {
         var inputModalities = modelData.Architecture?.InputModalities;
         if (inputModalities?.Contains("image", StringComparer.InvariantCultureIgnoreCase) != true)
@@ -100,7 +120,7 @@ public sealed class OpenRouterModelCapabilityProvider(
                 model,
                 inputModalities is { Count: > 0 } ? string.Join(", ", inputModalities) : "unknown");
 
-            return new HashSet<OpenAIModelCapability>();
+            return new HashSet<ModelCapability>();
         }
 
         logger.LogInformation(
@@ -108,11 +128,21 @@ public sealed class OpenRouterModelCapabilityProvider(
             model,
             string.Join(", ", inputModalities));
 
-        return new HashSet<OpenAIModelCapability> { OpenAIModelCapability.Vision };
+        return new HashSet<ModelCapability> { ModelCapability.Vision };
     }
 
     private static string BuildCacheKey(string baseUrl, string model) =>
         $"openrouter:{NormalizeBaseUrl(baseUrl).TrimEnd('/')}:{model}";
+
+    private static decimal? ParsePricePerMillionTokens(string? pricePerToken)
+    {
+        if (!decimal.TryParse(pricePerToken, NumberStyles.Float, CultureInfo.InvariantCulture, out var parsedPrice))
+        {
+            return null;
+        }
+
+        return parsedPrice * 1_000_000m;
+    }
 
     private static string NormalizeBaseUrl(string baseUrl)
     {
@@ -127,14 +157,22 @@ public sealed class OpenRouterModelCapabilityProvider(
     }
 
     private sealed record CacheEntry(
-        IReadOnlySet<OpenAIModelCapability> Capabilities,
+        ModelMetadata Metadata,
         DateTimeOffset ExpiresAt);
 
     private sealed record OpenRouterModelResponse(
         [property: JsonPropertyName("data")] OpenRouterModelData? Data);
 
     private sealed record OpenRouterModelData(
+        [property: JsonPropertyName("id")] string? Id,
+        [property: JsonPropertyName("name")] string? Name,
+        [property: JsonPropertyName("context_length")] int? ContextLength,
+        [property: JsonPropertyName("pricing")] OpenRouterModelPricing? Pricing,
         [property: JsonPropertyName("architecture")] OpenRouterModelArchitecture? Architecture);
+
+    private sealed record OpenRouterModelPricing(
+        [property: JsonPropertyName("prompt")] string? Prompt,
+        [property: JsonPropertyName("completion")] string? Completion);
 
     private sealed record OpenRouterModelArchitecture(
         [property: JsonPropertyName("input_modalities")] IReadOnlyList<string>? InputModalities);

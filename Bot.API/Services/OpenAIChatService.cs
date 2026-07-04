@@ -9,24 +9,23 @@ namespace Bot.API.Services;
 public class OpenAIChatService(
     HttpClient httpClient,
     OpenAIOptions options,
-    IOpenAIModelCapabilityResolver modelCapabilityResolver,
+    OpenAIChatRuntimeSettings runtimeSettings,
+    ModelMetadataResolver modelCapabilityResolver,
     ILogger<OpenAIChatService> logger)
 {
-    private const int DefaultContextMessageCount = 10;
-
     private static readonly JsonSerializerOptions JsonSerializerOptions = new(JsonSerializerDefaults.Web)
     {
         DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
     };
 
-    public int ContextMessageCount => Math.Max(0, options.ContextMessageCount ?? DefaultContextMessageCount);
+    public int ContextMessageCount => runtimeSettings.ContextMessageCount;
 
     public bool IsEnabled
     {
         get
         {
             return !string.IsNullOrWhiteSpace(options.BaseUrl) &&
-                   !string.IsNullOrWhiteSpace(options.Model) &&
+                   !string.IsNullOrWhiteSpace(runtimeSettings.Model) &&
                    !string.IsNullOrWhiteSpace(options.SystemPromptPath);
         }
     }
@@ -38,14 +37,16 @@ public class OpenAIChatService(
         IReadOnlyList<OpenAIImageInput>? imageInputs = null,
         CancellationToken cancellationToken = default)
     {
+        var model = runtimeSettings.Model;
+
         if (string.IsNullOrWhiteSpace(options.BaseUrl) ||
-            string.IsNullOrWhiteSpace(options.Model) ||
+            string.IsNullOrWhiteSpace(model) ||
             string.IsNullOrWhiteSpace(options.SystemPromptPath))
         {
             logger.LogWarning(
                 "OpenAI-compatible chat is not configured. BaseUrl configured: {HasBaseUrl}, Model configured: {HasModel}, SystemPromptPath configured: {HasSystemPromptPath}.",
                 !string.IsNullOrWhiteSpace(options.BaseUrl),
-                !string.IsNullOrWhiteSpace(options.Model),
+                !string.IsNullOrWhiteSpace(model),
                 !string.IsNullOrWhiteSpace(options.SystemPromptPath));
             return null;
         }
@@ -58,15 +59,15 @@ public class OpenAIChatService(
         }
 
         var tools = BuildTools(options.Tools);
-        var supportedImageInputs = await GetSupportedImageInputsAsync(options.Model, imageInputs, cancellationToken);
+        var supportedImageInputs = await GetSupportedImageInputsAsync(model, imageInputs, cancellationToken);
 
         using var request = new HttpRequestMessage(
             HttpMethod.Post,
             new Uri($"{NormalizeBaseUrl(options.BaseUrl).TrimEnd('/')}/chat/completions"))
         {
             Content = JsonContent.Create(new ChatCompletionRequest(
-                options.Model,
-                BuildMessages(prompt, BuildSystemPrompt(systemPrompt, options.Model, tools, requestContext), contextMessages, supportedImageInputs),
+                model,
+                BuildMessages(prompt, BuildSystemPrompt(systemPrompt, model, tools, requestContext), contextMessages, supportedImageInputs),
                 options.Temperature,
                 options.MaxTokens,
                 tools),
@@ -95,7 +96,7 @@ public class OpenAIChatService(
             var completion = await response.Content.ReadFromJsonAsync<ChatCompletionResponse>(
                 JsonSerializerOptions,
                 cancellationToken);
-            var content = completion?.Choices.FirstOrDefault()?.Message.Content?.Trim();
+            var content = completion?.Choices?.FirstOrDefault()?.Message.Content?.Trim();
 
             if (string.IsNullOrWhiteSpace(content))
             {
@@ -141,8 +142,8 @@ public class OpenAIChatService(
         }
 
         var supportsVision = await modelCapabilityResolver.SupportsAsync(
-            new OpenAIModelCapabilityRequest(options.BaseUrl, options.ApiKey, model),
-            OpenAIModelCapability.Vision,
+            new ModelMetadataRequest(options.BaseUrl, options.ApiKey, model),
+            ModelCapability.Vision,
             cancellationToken);
 
         if (supportsVision)
@@ -150,7 +151,7 @@ public class OpenAIChatService(
             return imageInputs;
         }
 
-        logger.LogInformation("Skipping image input because model {Model} does not have the {Capability} capability.", model, OpenAIModelCapability.Vision);
+        logger.LogInformation("Skipping image input because model {Model} does not have the {Capability} capability.", model, ModelCapability.Vision);
         return null;
     }
 
