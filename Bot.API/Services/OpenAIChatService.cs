@@ -65,7 +65,7 @@ public class OpenAIChatService(
         {
             Content = JsonContent.Create(new ChatCompletionRequest(
                 model,
-                BuildMessages(prompt, BuildSystemPrompt(systemPrompt, model, tools, requestContext), contextMessages, supportedImageInputs),
+                BuildMessages(prompt, BuildSystemPrompt(systemPrompt, model, tools, requestContext), contextMessages, requestContext, supportedImageInputs),
                 options.Temperature,
                 options.MaxTokens,
                 tools),
@@ -187,6 +187,7 @@ public class OpenAIChatService(
         string prompt,
         string? systemPrompt,
         IReadOnlyList<OpenAIContextMessage>? contextMessages,
+        OpenAIRequestContext? requestContext,
         IReadOnlyList<OpenAIImageInput>? imageInputs)
     {
         var messages = new List<ChatMessage>();
@@ -202,10 +203,10 @@ public class OpenAIChatService(
                 "user",
                 string.Join(
                     Environment.NewLine,
-                    ["Recent Discord messages before the user's question:", .. contextMessages.Select(FormatContextMessage)])));
+                    ["Recent Discord channel messages:", .. contextMessages.Select(FormatContextMessage)])));
         }
 
-        messages.Add(new ChatMessage("user", BuildUserMessageContent(prompt, imageInputs)));
+        messages.Add(new ChatMessage("user", BuildUserMessageContent(FormatCurrentMessage(prompt, requestContext), imageInputs)));
         return messages;
     }
 
@@ -265,6 +266,19 @@ public class OpenAIChatService(
 
     private static string FormatContextMessage(OpenAIContextMessage message) =>
         $"[{message.SentAt.ToUniversalTime():yyyy-MM-dd HH:mm:ss 'UTC'}] {message.AuthorName}: {message.Content}";
+
+    private static string FormatCurrentMessage(string prompt, OpenAIRequestContext? requestContext)
+    {
+        if (string.IsNullOrWhiteSpace(requestContext?.AuthorName))
+        {
+            return prompt;
+        }
+
+        return string.Join(
+            Environment.NewLine,
+            "Discord message that triggered this response:",
+            $"{requestContext.AuthorName}: {prompt}");
+    }
 
     private static IReadOnlyList<ChatTool>? BuildTools(IReadOnlyList<OpenAIChatToolOptions>? toolOptions)
     {
