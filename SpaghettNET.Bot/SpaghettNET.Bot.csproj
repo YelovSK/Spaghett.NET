@@ -1,0 +1,43 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+    <PropertyGroup>
+        <OutputType>Exe</OutputType>
+        <TargetFramework>net10.0</TargetFramework>
+        <ImplicitUsings>enable</ImplicitUsings>
+        <Nullable>enable</Nullable>
+        <UserSecretsId>b395cf98-66a1-4853-819d-9bf1ba1b1702</UserSecretsId>
+        <LangVersion>preview</LangVersion>
+    </PropertyGroup>
+
+    <ItemGroup>
+        <PackageReference Include="Microsoft.EntityFrameworkCore.Tasks" Version="10.0.9">
+          <PrivateAssets>all</PrivateAssets>
+          <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+        </PackageReference>
+        <PackageReference Include="Microsoft.Extensions.Hosting" Version="10.0.9" />
+        <PackageReference Include="NetCord" Version="1.0.0-alpha.416" />
+        <PackageReference Include="NetCord.Hosting" Version="1.0.0-alpha.416" />
+        <PackageReference Include="NetCord.Hosting.Services" Version="1.0.0-alpha.416" />
+        <PackageReference Include="NetCord.Services" Version="1.0.0-alpha.416" />
+    </ItemGroup>
+
+    <ItemGroup>
+        <None Update="appsettings*.json">
+            <CopyToOutputDirectory>Always</CopyToOutputDirectory>
+        </None>
+    </ItemGroup>
+
+    <ItemGroup>
+        <ProjectReference Include="..\SpaghettNET.Platform\SpaghettNET.Platform.csproj" />
+        <ProjectReference Include="..\SpaghettNET.Persistence\SpaghettNET.Persistence.csproj" />
+    </ItemGroup>
+
+    <Target Name="CopyPublishOutput" AfterTargets="Publish" Condition="'$(CopyPublishOutput)' != 'false'">
+        <ItemGroup>
+            <PublishedFiles Include="$(PublishDir)**\*.*" />
+        </ItemGroup>
+
+        <Copy SourceFiles="@(PublishedFiles)" DestinationFolder="$(MSBuildProjectDirectory)\..\PublishOutput\%(RecursiveDir)" SkipUnchangedFiles="true" />
+    </Target>
+
+</Project>

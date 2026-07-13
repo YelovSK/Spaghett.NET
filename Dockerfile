@@ -5,14 +5,13 @@ WORKDIR /src
 
 COPY ["global.json", "./"]
 COPY ["SpaghettNET.sln", "./"]
-COPY ["Bot.API/Bot.API.csproj", "Bot.API/"]
-COPY ["Bot.Application/Bot.Application.csproj", "Bot.Application/"]
-COPY ["Bot.Infrastructure/Bot.Infrastructure.csproj", "Bot.Infrastructure/"]
-COPY ["Bot.Persistence/Bot.Persistence.csproj", "Bot.Persistence/"]
-RUN dotnet restore "Bot.API/Bot.API.csproj"
+COPY ["SpaghettNET.Bot/SpaghettNET.Bot.csproj", "SpaghettNET.Bot/"]
+COPY ["SpaghettNET.Platform/SpaghettNET.Platform.csproj", "SpaghettNET.Platform/"]
+COPY ["SpaghettNET.Persistence/SpaghettNET.Persistence.csproj", "SpaghettNET.Persistence/"]
+RUN dotnet restore "SpaghettNET.Bot/SpaghettNET.Bot.csproj"
 
 COPY . .
-RUN dotnet publish "Bot.API/Bot.API.csproj" \
+RUN dotnet publish "SpaghettNET.Bot/SpaghettNET.Bot.csproj" \
         -c Release \
         -r linux-x64 \
         --self-contained false \
@@ -29,4 +28,4 @@ USER $APP_UID
 ENV DOTNET_EnableDiagnostics=0
 COPY --from=build --chown=$APP_UID:$APP_UID /app/publish .
 
-ENTRYPOINT ["dotnet", "Bot.API.dll"]
+ENTRYPOINT ["dotnet", "SpaghettNET.Bot.dll"]

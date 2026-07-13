@@ -3,13 +3,11 @@ Microsoft Visual Studio Solution File, Format Version 12.00
 # Visual Studio Version 17
 VisualStudioVersion = 17.12.35424.110
 MinimumVisualStudioVersion = 10.0.40219.1
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Bot.Persistence", "Bot.Persistence\Bot.Persistence.csproj", "{9008C52B-44C4-4871-973B-38A2150105D1}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "SpaghettNET.Persistence", "SpaghettNET.Persistence\SpaghettNET.Persistence.csproj", "{9008C52B-44C4-4871-973B-38A2150105D1}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Bot.API", "Bot.API\Bot.API.csproj", "{EB61F4F5-68B4-497D-8A43-1B6CA07F21B2}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "SpaghettNET.Bot", "SpaghettNET.Bot\SpaghettNET.Bot.csproj", "{EB61F4F5-68B4-497D-8A43-1B6CA07F21B2}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Bot.Infrastructure", "Bot.Infrastructure\Bot.Infrastructure.csproj", "{7260CFA5-C156-4174-A208-6A4977C54C4E}"
-EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Bot.Application", "Bot.Application\Bot.Application.csproj", "{777AEA80-286B-4DF6-A975-EBEDBDDC226D}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "SpaghettNET.Platform", "SpaghettNET.Platform\SpaghettNET.Platform.csproj", "{7260CFA5-C156-4174-A208-6A4977C54C4E}"
 EndProject
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Info", "Info", "{49C1BD45-FFE9-4186-8AD8-BB658B653D30}"
 	ProjectSection(SolutionItems) = preProject

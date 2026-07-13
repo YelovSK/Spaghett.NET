@@ -1,0 +1,11 @@
+{
+  "profiles": {
+    "SpaghettNET.Bot": {
+      "commandName": "Project",
+      "workingDirectory": "..",
+      "environmentVariables": {
+        "DOTNET_ENVIRONMENT": "Development"
+      }
+    }
+  }
+}
