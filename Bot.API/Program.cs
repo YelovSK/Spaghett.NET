@@ -31,6 +31,7 @@ builder.Services
     .AddSingleton(new HttpClient { Timeout = TimeSpan.FromMinutes(5) })
     .AddSingleton<IModelMetadataProvider, OpenRouterModelMetadataProvider>()
     .AddSingleton<ModelMetadataResolver>()
+    .AddSingleton<OpenRouterManagementClient>()
     .AddSingleton<OpenAIChatClient>()
     .AddSingleton<OpenAIReplyGenerator>()
     .AddSingleton<IMessageCreateResponder, OpenAIMessageResponder>()

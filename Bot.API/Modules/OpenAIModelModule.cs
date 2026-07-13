@@ -8,8 +8,13 @@ namespace Bot.API.Modules;
 public class OpenAIModelModule(
     OpenAIChatRuntimeSettings runtimeSettings,
     OpenAIOptions options,
-    ModelMetadataResolver modelMetadataResolver) : ApplicationCommandModule<ApplicationCommandContext>
+    ModelMetadataResolver modelMetadataResolver,
+    OpenRouterManagementClient creditsClient) : ApplicationCommandModule<ApplicationCommandContext>
 {
+    private const int EstimatedInputTokensPerResponse = 2_000;
+    private const int EstimatedOutputTokensPerResponse = 500;
+    private const decimal TokensPerMillion = 1_000_000m;
+
     [SubSlashCommand("show", "Shows the current LLM model")]
     public string Show()
     {
@@ -57,6 +62,62 @@ public class OpenAIModelModule(
         return $"Model reset to {runtimeSettings.Model}.";
     }
 
+    [SubSlashCommand("balance", "Shows remaining OpenRouter credit and estimated responses")]
+    public async Task<string> Balance()
+    {
+        if (!creditsClient.CanHandleConfiguredProvider())
+        {
+            return "The configured OpenAI-compatible provider is not OpenRouter.";
+        }
+
+        if (string.IsNullOrWhiteSpace(options.ManagementApiKey))
+        {
+            return "OpenRouter management API key is not configured.";
+        }
+
+        var remainingCredits = await creditsClient.GetRemainingCreditsAsync();
+        if (remainingCredits is null)
+        {
+            return "Could not get the remaining OpenRouter credit.";
+        }
+
+        var lines = new List<string>
+        {
+            $"Remaining OpenRouter credit: {FormatCredit(remainingCredits.Value)}",
+        };
+
+        var model = runtimeSettings.Model;
+        if (string.IsNullOrWhiteSpace(model))
+        {
+            lines.Add("Could not estimate responses because no model is selected.");
+            return string.Join(Environment.NewLine, lines);
+        }
+
+        var metadata = await modelMetadataResolver.GetModelMetadataAsync(
+            new ModelMetadataRequest(options.BaseUrl, options.ApiKey, model));
+        if (metadata?.InputPricePerMillionTokens is not { } inputPrice ||
+            metadata.OutputPricePerMillionTokens is not { } outputPrice)
+        {
+            lines.Add($"Could not estimate responses because pricing for {model} is unavailable.");
+            return string.Join(Environment.NewLine, lines);
+        }
+
+        var estimatedResponseCost =
+            inputPrice * EstimatedInputTokensPerResponse / TokensPerMillion +
+            outputPrice * EstimatedOutputTokensPerResponse / TokensPerMillion;
+
+        if (estimatedResponseCost == 0)
+        {
+            lines.Add($"Estimated responses with {model}: credit is not the limiting factor because the model is free.");
+            return string.Join(Environment.NewLine, lines);
+        }
+
+        var estimatedResponses = decimal.Floor(Math.Max(0, remainingCredits.Value) / estimatedResponseCost);
+        lines.Add($"Estimated ~{estimatedResponses.ToString("N0", CultureInfo.InvariantCulture)} responses with {model}.");
+
+        return string.Join(Environment.NewLine, lines);
+    }
+
     private static string FormatModelChanged(ModelMetadata metadata)
     {
         var lines = new List<string> { $"Model changed to {metadata.Id}." };
@@ -90,4 +151,7 @@ public class OpenAIModelModule(
     private static string FormatPrice(decimal price) => price == 0
         ? "$0"
         : $"${price.ToString("0.######", CultureInfo.InvariantCulture)}";
+
+    private static string FormatCredit(decimal credit) =>
+        $"${credit.ToString("0.00##", CultureInfo.InvariantCulture)}";
 }

@@ -9,6 +9,7 @@ services:
       ConnectionStrings__Bot: "Data Source=/data/data.db"
       OpenAI__BaseUrl: ${OPENAI_BASE_URL}
       OpenAI__ApiKey: ${OPENAI_API_KEY}
+      OpenAI__ManagementApiKey: ${OPENROUTER_MANAGEMENT_API_KEY}
       OpenAI__Model: ${OPENAI_MODEL}
       OpenAI__Temperature: ${OPENAI_TEMPERATURE}
       OpenAI__MaxTokens: ${OPENAI_MAX_TOKENS}
