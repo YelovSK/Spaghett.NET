@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Text.RegularExpressions;
 using Microsoft.Extensions.Logging;
 using NetCord;
@@ -14,6 +15,10 @@ public partial class OpenAIReplyGenerator(
     OpenAIChatClient chatClient,
     ILogger<OpenAIReplyGenerator> logger)
 {
+    private const int ContextBootstrapDivisor = 2;
+    private const int MaxContextImages = 4;
+    private readonly ConcurrentDictionary<ulong, ChannelContext> _channelContexts = [];
+
     [GeneratedRegex(@"<(?<name>[A-Za-z0-9_]+)>")]
     private static partial Regex EmoteRegex();
 
@@ -27,35 +32,35 @@ public partial class OpenAIReplyGenerator(
 
     public async Task<string?> GetReplyAsync(Message message, CancellationToken cancellationToken = default)
     {
-        var messageContext = await GetContextMessagesAsync(message);
-        var imageInputs = BuildImageInputs(message, messageContext.ImageInputs);
-        var prompt = FormatContextMessageContent(message.Content, message.Attachments);
-        var response = await GetChatResponseAsync(
-            prompt,
-            messageContext.Messages,
-            BuildRequestContext(message),
-            imageInputs,
-            cancellationToken);
+        var channelContext = _channelContexts.GetOrAdd(message.ChannelId, static _ => new ChannelContext());
+        await channelContext.Lock.WaitAsync(cancellationToken);
 
-        if (string.IsNullOrWhiteSpace(response))
+        try
         {
-            logger.LogWarning(
-                "OpenAI responder produced no response. ChannelId: {ChannelId}, MessageId: {MessageId}, AuthorId: {AuthorId}, Prompt: {Prompt}",
-                message.ChannelId,
-                message.Id,
-                message.Author.Id,
-                prompt);
-            return null;
-        }
+            var messageContext = await GetContextMessagesAsync(message, channelContext, cancellationToken);
+            var response = await GetChatResponseAsync(messageContext, cancellationToken);
 
-        return await InsertEmoteTokensAsync(message, response);
+            if (string.IsNullOrWhiteSpace(response))
+            {
+                logger.LogWarning(
+                    "OpenAI responder produced no response. ChannelId: {ChannelId}, MessageId: {MessageId}, AuthorId: {AuthorId}, Prompt: {Prompt}",
+                    message.ChannelId,
+                    message.Id,
+                    message.Author.Id,
+                    FormatContextMessageContent(message.Content, message.Attachments));
+                return null;
+            }
+
+            return await InsertEmoteTokensAsync(message, response);
+        }
+        finally
+        {
+            channelContext.Lock.Release();
+        }
     }
 
     private async Task<string?> GetChatResponseAsync(
-        string prompt,
-        IReadOnlyList<OpenAIContextMessage>? contextMessages,
-        OpenAIRequestContext? requestContext,
-        IReadOnlyList<OpenAIImageInput>? imageInputs,
+        OpenAIMessageContext messageContext,
         CancellationToken cancellationToken)
     {
         var model = runtimeSettings.Model;
@@ -80,20 +85,20 @@ public partial class OpenAIReplyGenerator(
         }
 
         var tools = BuildTools(options.Tools);
+        var imageInputs = messageContext.Messages
+            .SelectMany(contextMessage => contextMessage.ImageInputs)
+            .OrderByDescending(imageInput => imageInput.SentAt)
+            .Take(MaxContextImages)
+            .ToArray();
         var supportedImageInputs = await GetSupportedImageInputsAsync(model, imageInputs, cancellationToken);
         var chatRequest = new OpenAIChatRequest(
             model,
-            BuildMessages(
-                prompt,
-                BuildSystemPrompt(systemPrompt, model, tools, requestContext),
-                contextMessages,
-                requestContext,
-                supportedImageInputs),
+            BuildMessages(systemPrompt, messageContext, supportedImageInputs),
             options.Temperature,
             options.MaxTokens,
             tools);
 
-        return await chatClient.GetResponseAsync(chatRequest, cancellationToken);
+        return await chatClient.GetResponseAsync(chatRequest, messageContext.SessionId, cancellationToken);
     }
 
     private async Task<string> InsertEmoteTokensAsync(Message sourceMessage, string response)
@@ -135,48 +140,88 @@ public partial class OpenAIReplyGenerator(
                 : match.Value);
     }
 
-    private async Task<OpenAIMessageContext> GetContextMessagesAsync(Message message)
+    private async Task<OpenAIMessageContext> GetContextMessagesAsync(
+        Message message,
+        ChannelContext channelContext,
+        CancellationToken cancellationToken)
     {
-        var contextMessageCount = runtimeSettings.ContextMessageCount;
-        if (contextMessageCount == 0)
-        {
-            return new OpenAIMessageContext([], []);
-        }
-
         var pagination = new PaginationProperties<ulong>
         {
             From = message.Id,
             Direction = PaginationDirection.Before,
-            BatchSize = contextMessageCount,
+            BatchSize = 100,
         };
 
-        var messages = new List<OpenAIContextMessage>();
-        var imageInputs = new List<OpenAIImageInput>();
+        var messages = new List<OpenAIContextMessage> { CreateContextMessage(message) };
+        var characterCount = GetFormattedLength(messages[0]);
+        var anchorMessageId = channelContext.AnchorMessageId;
+        var foundAnchor = anchorMessageId == message.Id;
+        var bootstrapCharacterBudget = runtimeSettings.ContextCharacterBudget / ContextBootstrapDivisor;
 
-        await foreach (var contextMessage in gatewayClient.Rest.GetMessagesAsync(message.ChannelId, pagination))
+        await foreach (var contextMessage in gatewayClient.Rest
+                           .GetMessagesAsync(message.ChannelId, pagination)
+                           .WithCancellation(cancellationToken))
         {
-            imageInputs.AddRange(GetImageInputs(contextMessage));
+            var formattedMessage = CreateContextMessage(contextMessage);
+            messages.Add(formattedMessage);
+            characterCount += GetFormattedLength(formattedMessage);
 
-            var content = FormatContextMessageContent(contextMessage.Content, contextMessage.Attachments);
-            if (string.IsNullOrWhiteSpace(content))
+            if (contextMessage.Id == anchorMessageId)
             {
-                continue;
+                foundAnchor = true;
+                break;
             }
 
-            messages.Add(new OpenAIContextMessage(
-                contextMessage.CreatedAt,
-                GetAuthorName(contextMessage.Author),
-                content));
-
-            if (messages.Count == contextMessageCount)
+            if (anchorMessageId.HasValue
+                    ? characterCount > runtimeSettings.ContextCharacterBudget
+                    : characterCount >= bootstrapCharacterBudget)
             {
                 break;
             }
         }
 
+        var foundCacheBreakpoint = messages.Any(contextMessage =>
+            contextMessage.Id == channelContext.CacheBreakpointMessageId);
+
+        if (!foundAnchor || !foundCacheBreakpoint || characterCount > runtimeSettings.ContextCharacterBudget)
+        {
+            messages = TakeNewestMessages(messages, bootstrapCharacterBudget);
+            channelContext.AnchorMessageId = messages[^1].Id;
+            channelContext.CacheBreakpointMessageId = messages[0].Id;
+        }
+
         messages.Reverse();
-        return new OpenAIMessageContext(messages, imageInputs.OrderBy(imageInput => imageInput.SentAt).ToArray());
+        return new OpenAIMessageContext(
+            FormatChannel(message) + Environment.NewLine,
+            messages,
+            channelContext.CacheBreakpointMessageId!.Value,
+            $"discord:{message.ChannelId}:{channelContext.AnchorMessageId}");
     }
+
+    private static List<OpenAIContextMessage> TakeNewestMessages(
+        IReadOnlyList<OpenAIContextMessage> messages,
+        int characterBudget)
+    {
+        var result = new List<OpenAIContextMessage>();
+        var characterCount = 0;
+
+        foreach (var message in messages)
+        {
+            var messageLength = GetFormattedLength(message);
+            if (result.Count > 0 && characterCount + messageLength > characterBudget)
+            {
+                break;
+            }
+
+            result.Add(message);
+            characterCount += messageLength;
+        }
+
+        return result;
+    }
+
+    private static int GetFormattedLength(OpenAIContextMessage message) =>
+        FormatContextMessage(message).Length + Environment.NewLine.Length;
 
     private async Task<IReadOnlyList<OpenAIImageInput>?> GetSupportedImageInputsAsync(
         string model,
@@ -236,72 +281,19 @@ public partial class OpenAIReplyGenerator(
     }
 
     private static IReadOnlyList<OpenAIChatMessage> BuildMessages(
-        string prompt,
-        string? systemPrompt,
-        IReadOnlyList<OpenAIContextMessage>? contextMessages,
-        OpenAIRequestContext? requestContext,
+        string systemPrompt,
+        OpenAIMessageContext messageContext,
         IReadOnlyList<OpenAIImageInput>? imageInputs)
     {
-        var messages = new List<OpenAIChatMessage>();
-
-        if (!string.IsNullOrWhiteSpace(systemPrompt))
-        {
-            messages.Add(new OpenAIChatMessage("system", systemPrompt));
-        }
-
-        if (contextMessages is { Count: > 0 })
-        {
-            messages.Add(new OpenAIChatMessage(
-                "user",
-                string.Join(
-                    Environment.NewLine,
-                    ["Recent Discord channel messages:", .. contextMessages.Select(FormatContextMessage)])));
-        }
-
-        messages.Add(new OpenAIChatMessage(
-            "user",
-            BuildUserMessageContent(FormatCurrentMessage(prompt, requestContext), imageInputs)));
-        return messages;
-    }
-
-    private static string BuildSystemPrompt(
-        string systemPrompt,
-        string model,
-        IReadOnlyList<OpenAIChatTool>? tools,
-        OpenAIRequestContext? requestContext)
-    {
-        var contextLines = new List<string>
-        {
-            string.Empty,
-            "Runtime context:",
-            $"- Model: {model}",
-            $"- Current UTC time: {DateTimeOffset.UtcNow:yyyy-MM-dd HH:mm:ss 'UTC'}",
-            $"- Available tools: {FormatAvailableTools(tools)}",
-        };
-
-        if (!string.IsNullOrWhiteSpace(requestContext?.ChannelName))
-        {
-            contextLines.Add($"- Discord channel: #{requestContext.ChannelName}");
-        }
-
-        return systemPrompt.TrimEnd() + Environment.NewLine + string.Join(Environment.NewLine, contextLines);
+        return
+        [
+            new OpenAIChatMessage("system", systemPrompt),
+            new OpenAIChatMessage("user", BuildUserMessageContent(messageContext, imageInputs)),
+        ];
     }
 
     private static string FormatContextMessage(OpenAIContextMessage message) =>
         $"[{message.SentAt.ToUniversalTime():yyyy-MM-dd HH:mm:ss 'UTC'}] {message.AuthorName}: {message.Content}";
-
-    private static string FormatCurrentMessage(string prompt, OpenAIRequestContext? requestContext)
-    {
-        if (string.IsNullOrWhiteSpace(requestContext?.AuthorName))
-        {
-            return prompt;
-        }
-
-        return string.Join(
-            Environment.NewLine,
-            "Discord message that triggered this response:",
-            $"{requestContext.AuthorName}: {prompt}");
-    }
 
     private static IReadOnlyList<OpenAIChatTool>? BuildTools(IReadOnlyList<OpenAIChatToolOptions>? toolOptions)
     {
@@ -313,72 +305,46 @@ public partial class OpenAIReplyGenerator(
         return tools is { Length: > 0 } ? tools : null;
     }
 
-    private static string FormatAvailableTools(IReadOnlyList<OpenAIChatTool>? tools) =>
-        tools is { Count: > 0 }
-            ? string.Join(", ", tools.Select(tool => tool.Type))
-            : "none";
-
     private static object BuildUserMessageContent(
-        string prompt,
+        OpenAIMessageContext messageContext,
         IReadOnlyList<OpenAIImageInput>? imageInputs)
     {
-        var validImageInputs = imageInputs?
-            .Where(imageInput => !string.IsNullOrWhiteSpace(imageInput.Url))
-            .ToArray();
-
-        if (validImageInputs is not { Length: > 0 })
+        var supportedImageUrls = imageInputs?
+            .Select(imageInput => imageInput.Url)
+            .ToHashSet(StringComparer.Ordinal) ?? [];
+        var contentParts = new List<OpenAIChatContentPart>
         {
-            return prompt;
-        }
+            new("text", Text: messageContext.ChannelHeader),
+        };
 
-        var contentParts = new List<OpenAIChatContentPart> { new("text", Text: prompt) };
-
-        for (var i = 0; i < validImageInputs.Length; i++)
+        foreach (var message in messageContext.Messages)
         {
-            var imageInput = validImageInputs[i];
-            contentParts.Add(new OpenAIChatContentPart("text", Text: FormatImageInputContext(imageInput, i + 1)));
-            contentParts.Add(new OpenAIChatContentPart(
-                "image_url",
-                ImageUrl: new OpenAIChatImageUrl(imageInput.Url)));
+            var textPart = new OpenAIChatContentPart(
+                "text",
+                Text: FormatContextMessage(message) + Environment.NewLine);
+            if (message.Id == messageContext.CacheBreakpointMessageId)
+            {
+                textPart = textPart with { CacheControl = new("ephemeral") };
+            }
+
+            contentParts.Add(textPart);
+            contentParts.AddRange(message.ImageInputs
+                .Where(imageInput => supportedImageUrls.Contains(imageInput.Url))
+                .Select(imageInput => new OpenAIChatContentPart(
+                    "image_url",
+                    ImageUrl: new OpenAIChatImageUrl(imageInput.Url))));
         }
 
         return contentParts;
     }
 
-    private static string FormatImageInputContext(OpenAIImageInput imageInput, int index)
-    {
-        var lines = new List<string>
-        {
-            $"Image {index} is attached to this Discord message:",
-            $"[{imageInput.SentAt.ToUniversalTime():yyyy-MM-dd HH:mm:ss 'UTC'}] {imageInput.AuthorName}: {FormatImageMessageContent(imageInput.MessageContent)}",
-        };
-
-        if (!string.IsNullOrWhiteSpace(imageInput.FileName))
-        {
-            lines.Add($"Attachment filename: {imageInput.FileName}");
-        }
-
-        return string.Join(Environment.NewLine, lines);
-    }
-
-    private static string FormatImageMessageContent(string? messageContent) =>
-        string.IsNullOrWhiteSpace(messageContent) ? "(no message text)" : messageContent;
-
     private static string NormalizeEmoteTokens(string messageContent) =>
         DiscordEmoteRegex().Replace(messageContent, match => $"<{match.Groups["name"].Value}>");
 
-    private static OpenAIRequestContext BuildRequestContext(Message message)
-    {
-        var channelName = message.Channel is INamedChannel namedChannel ? namedChannel.Name : null;
-        var channelTopic = message.Channel is TextGuildChannel textGuildChannel ? textGuildChannel.Topic : null;
-
-        return new OpenAIRequestContext(
-            message.Guild?.Name,
-            message.ChannelId,
-            channelName,
-            channelTopic,
-            GetAuthorName(message.Author));
-    }
+    private static string FormatChannel(Message message) =>
+        message.Channel is INamedChannel namedChannel
+            ? $"Discord channel: #{namedChannel.Name}"
+            : $"Discord channel ID: {message.ChannelId}";
 
     private static string FormatContextMessageContent(string content, IReadOnlyList<Attachment> attachments)
     {
@@ -431,50 +397,43 @@ public partial class OpenAIReplyGenerator(
         return string.Join(", ", details);
     }
 
-    private IReadOnlyList<OpenAIImageInput>? BuildImageInputs(
-        Message currentMessage,
-        IReadOnlyList<OpenAIImageInput> contextImageInputs)
-    {
-        var currentImageInputs = GetImageInputs(currentMessage)
-            .Take(runtimeSettings.ContextImagesCount)
-            .ToArray();
-        var contextImageInputCount = Math.Max(0, runtimeSettings.ContextImagesCount - currentImageInputs.Length);
-        var recentContextImageInputs = contextImageInputs
-            .OrderByDescending(imageInput => imageInput.SentAt)
-            .Take(contextImageInputCount)
-            .OrderBy(imageInput => imageInput.SentAt)
-            .ToArray();
-        var imageInputs = recentContextImageInputs
-            .Concat(currentImageInputs)
-            .ToArray();
+    private static OpenAIContextMessage CreateContextMessage(Message message) =>
+        CreateContextMessage(
+            message.Id,
+            message.CreatedAt,
+            message.Author,
+            message.Content,
+            message.Attachments);
 
-        return imageInputs.Length == 0 ? null : imageInputs;
-    }
+    private static OpenAIContextMessage CreateContextMessage(RestMessage message) =>
+        CreateContextMessage(
+            message.Id,
+            message.CreatedAt,
+            message.Author,
+            message.Content,
+            message.Attachments);
 
-    private static IEnumerable<OpenAIImageInput> GetImageInputs(Message message) =>
-        GetImageInputs(message.CreatedAt, message.Author, message.Content, message.Attachments);
-
-    private static IEnumerable<OpenAIImageInput> GetImageInputs(RestMessage message) =>
-        GetImageInputs(message.CreatedAt, message.Author, message.Content, message.Attachments);
-
-    private static IEnumerable<OpenAIImageInput> GetImageInputs(
+    private static OpenAIContextMessage CreateContextMessage(
+        ulong id,
         DateTimeOffset createdAt,
         User author,
         string content,
+        IReadOnlyList<Attachment> attachments) =>
+        new(
+            id,
+            createdAt,
+            GetAuthorName(author),
+            FormatContextMessageContent(content, attachments),
+            GetImageInputs(createdAt, attachments).ToArray());
+
+    private static IEnumerable<OpenAIImageInput> GetImageInputs(
+        DateTimeOffset createdAt,
         IReadOnlyList<Attachment> attachments)
     {
-        var messageContent = FormatMessageTextContent(content);
-        var authorName = GetAuthorName(author);
-
         return attachments
             .Where(IsImageAttachment)
             .Where(attachment => !string.IsNullOrWhiteSpace(attachment.Url))
-            .Select(attachment => new OpenAIImageInput(
-                attachment.Url,
-                createdAt,
-                authorName,
-                messageContent,
-                attachment.FileName));
+            .Select(attachment => new OpenAIImageInput(attachment.Url, createdAt));
     }
 
     private static bool IsImageAttachment(Attachment attachment) =>
@@ -484,22 +443,26 @@ public partial class OpenAIReplyGenerator(
     private static string GetAuthorName(User user) => user.GlobalName ?? user.Username;
 
     private sealed record OpenAIMessageContext(
+        string ChannelHeader,
         IReadOnlyList<OpenAIContextMessage> Messages,
+        ulong CacheBreakpointMessageId,
+        string SessionId);
+
+    private sealed record OpenAIContextMessage(
+        ulong Id,
+        DateTimeOffset SentAt,
+        string AuthorName,
+        string Content,
         IReadOnlyList<OpenAIImageInput> ImageInputs);
 
-    private sealed record OpenAIContextMessage(DateTimeOffset SentAt, string AuthorName, string Content);
-
-    private sealed record OpenAIRequestContext(
-        string? GuildName,
-        ulong ChannelId,
-        string? ChannelName,
-        string? ChannelTopic,
-        string AuthorName);
+    private sealed class ChannelContext
+    {
+        public ulong? AnchorMessageId { get; set; }
+        public ulong? CacheBreakpointMessageId { get; set; }
+        public SemaphoreSlim Lock { get; } = new(1, 1);
+    }
 
     private sealed record OpenAIImageInput(
         string Url,
-        DateTimeOffset SentAt,
-        string AuthorName,
-        string? MessageContent,
-        string? FileName);
+        DateTimeOffset SentAt);
 }

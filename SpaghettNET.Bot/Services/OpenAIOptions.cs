@@ -9,7 +9,7 @@ public sealed class OpenAIOptions
     public string? SystemPromptPath { get; init; }
     public double? Temperature { get; init; }
     public int? MaxTokens { get; init; }
-    public int? ContextMessageCount { get; init; }
+    public int? ContextCharacterBudget { get; init; }
     public IReadOnlyList<OpenAIChatToolOptions>? Tools { get; init; }
 }
 

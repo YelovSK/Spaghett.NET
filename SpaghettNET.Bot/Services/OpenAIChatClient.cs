@@ -18,6 +18,7 @@ public sealed class OpenAIChatClient(
 
     internal async Task<string?> GetResponseAsync(
         OpenAIChatRequest chatRequest,
+        string sessionId,
         CancellationToken cancellationToken = default)
     {
         using var request = new HttpRequestMessage(
@@ -31,6 +32,8 @@ public sealed class OpenAIChatClient(
         {
             request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", options.ApiKey);
         }
+
+        request.Headers.Add("x-session-id", sessionId);
 
         try
         {
@@ -85,7 +88,16 @@ public sealed class OpenAIChatClient(
     }
 
     private sealed record ChatCompletionResponse(
-        [property: JsonPropertyName("choices")] IReadOnlyList<ChatChoice> Choices);
+        [property: JsonPropertyName("choices")] IReadOnlyList<ChatChoice> Choices,
+        [property: JsonPropertyName("usage")] ChatCompletionUsage? Usage);
+
+    private sealed record ChatCompletionUsage(
+        [property: JsonPropertyName("prompt_tokens")] int PromptTokens,
+        [property: JsonPropertyName("prompt_tokens_details")] PromptTokensDetails? PromptTokensDetails);
+
+    private sealed record PromptTokensDetails(
+        [property: JsonPropertyName("cached_tokens")] int CachedTokens,
+        [property: JsonPropertyName("cache_write_tokens")] int CacheWriteTokens);
 
     private sealed record ChatChoice(
         [property: JsonPropertyName("message")] ChatCompletionResponseMessage Message);
@@ -108,7 +120,11 @@ internal sealed record OpenAIChatMessage(
 internal sealed record OpenAIChatContentPart(
     [property: JsonPropertyName("type")] string Type,
     [property: JsonPropertyName("text")] string? Text = null,
-    [property: JsonPropertyName("image_url")] OpenAIChatImageUrl? ImageUrl = null);
+    [property: JsonPropertyName("image_url")] OpenAIChatImageUrl? ImageUrl = null,
+    [property: JsonPropertyName("cache_control")] OpenAICacheControl? CacheControl = null);
+
+internal sealed record OpenAICacheControl(
+    [property: JsonPropertyName("type")] string Type);
 
 internal sealed record OpenAIChatImageUrl(
     [property: JsonPropertyName("url")] string Url);
