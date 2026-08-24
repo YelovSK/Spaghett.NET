@@ -27,11 +27,7 @@ builder.Services
     .AddGatewayHandlers(typeof(Program).Assembly)
     .AddSingleton(builder.Configuration.GetSection("OpenAI").Get<OpenAIOptions>() ?? new OpenAIOptions())
     .AddSingleton<OpenAIChatRuntimeSettings>()
-    .AddSingleton(new HttpClient { Timeout = TimeSpan.FromMinutes(5) })
-    .AddSingleton<IModelMetadataProvider, OpenRouterModelMetadataProvider>()
     .AddSingleton<ModelMetadataResolver>()
-    .AddSingleton<OpenRouterManagementClient>()
-    .AddSingleton<OpenAIChatClient>()
     .AddSingleton<OpenAIReplyGenerator>()
     .AddSingleton<IMessageCreateResponder, OpenAIMessageResponder>()
     .AddSingleton<IMessageCreateResponder, SpecialWordResponder>()
@@ -39,6 +35,11 @@ builder.Services
     .AddSingleton<IMessageCreateResponder, MessageLengthResponder>()
     .AddSingleton<IMessageCreateResponder, CapsLockResponder>()
     .AddSingleton<ImageService>();
+
+builder.Services.AddHttpClient<OpenAIChatClient>(client =>
+    client.Timeout = TimeSpan.FromSeconds(90));
+builder.Services.AddHttpClient<OpenRouterManagementClient>();
+builder.Services.AddHttpClient<IModelMetadataProvider, OpenRouterModelMetadataProvider>();
 
 builder.Services
     .AddDbContextFactory<BotContext>(ConfigureBotContext);
