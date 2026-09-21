@@ -1,7 +1,9 @@
 using SpaghettNET.Bot.Extensions;
 using SpaghettNET.Bot.Handlers.MessageResponders;
+using SpaghettNET.Bot.Services;
 using SpaghettNET.Persistence;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging;
 using NetCord.Gateway;
 using NetCord.Hosting.Gateway;
 using NetCord.Rest;
@@ -11,6 +13,8 @@ namespace SpaghettNET.Bot.Handlers;
 public class MessageCreateHandler(
     IDbContextFactory<BotContext> dbContextFactory,
     GatewayClient gatewayClient,
+    DiscordMemoryService memoryService,
+    ILogger<MessageCreateHandler> logger,
     IEnumerable<IMessageCreateResponder> responders) : IMessageCreateGatewayHandler
 {
     private static readonly TimeSpan TypingRefreshInterval = TimeSpan.FromSeconds(8);
@@ -25,34 +29,49 @@ public class MessageCreateHandler(
             return;
         }
 
-        foreach (var responder in responders)
+        var memoryTask = memoryService.ObserveAsync(message);
+        try
         {
-            if (!await responder.ShouldRespondAsync(message))
+            foreach (var responder in responders)
             {
-                continue;
-            }
-
-            MessageCreateResponse? response = null;
-            await RunWithTypingIndicatorAsync(
-                message.ChannelId,
-                async () =>
+                if (!await responder.ShouldRespondAsync(message))
                 {
-                    response = await responder.GetResponseAsync(message);
+                    continue;
+                }
 
-                    if (response is not null)
+                MessageCreateResponse? response = null;
+                await RunWithTypingIndicatorAsync(
+                    message.ChannelId,
+                    async () =>
                     {
-                        await SendResponseAsync(message, response);
-                    }
-                });
+                        response = await responder.GetResponseAsync(message);
 
-            if (response is null)
-            {
-                continue;
+                        if (response is not null)
+                        {
+                            await SendResponseAsync(message, response);
+                        }
+                    });
+
+                if (response is null)
+                {
+                    continue;
+                }
+
+                if (response.StopProcessing)
+                {
+                    return;
+                }
             }
-
-            if (response.StopProcessing)
+        }
+        finally
+        {
+            try
             {
-                return;
+                await memoryTask;
+            }
+            catch (Exception ex)
+            {
+                logger.LogWarning(ex, "Discord memory observation failed.");
             }
         }
     }

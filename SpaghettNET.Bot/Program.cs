@@ -21,13 +21,14 @@ var builder = Host.CreateApplicationBuilder(new HostApplicationBuilderSettings
 builder.Services
     .AddDiscordGateway(options =>
     {
-        options.Intents = GatewayIntents.GuildMessages | GatewayIntents.DirectMessages | GatewayIntents.MessageContent;
+        options.Intents = GatewayIntents.Guilds | GatewayIntents.GuildMessages | GatewayIntents.DirectMessages | GatewayIntents.MessageContent;
     })
     .AddApplicationCommands()
     .AddGatewayHandlers(typeof(Program).Assembly)
     .AddSingleton(builder.Configuration.GetSection("OpenAI").Get<OpenAIOptions>() ?? new OpenAIOptions())
     .AddSingleton<OpenAIChatRuntimeSettings>()
     .AddSingleton<ModelMetadataResolver>()
+    .AddSingleton<DiscordMemoryService>()
     .AddSingleton<OpenAIReplyGenerator>()
     .AddSingleton<IMessageCreateResponder, OpenAIMessageResponder>()
     .AddSingleton<IMessageCreateResponder, SpecialWordResponder>()
@@ -38,6 +39,8 @@ builder.Services
 
 builder.Services.AddHttpClient<OpenAIChatClient>(client =>
     client.Timeout = TimeSpan.FromSeconds(90));
+builder.Services.AddHttpClient<JevClient>(client =>
+    client.Timeout = TimeSpan.FromSeconds(10));
 builder.Services.AddHttpClient<OpenRouterManagementClient>();
 builder.Services.AddHttpClient<IModelMetadataProvider, OpenRouterModelMetadataProvider>();
 
@@ -56,6 +59,7 @@ host.AddApplicationCommandModule<SpaghettNET.Bot.Modules.MiscModule>();
 host.AddApplicationCommandModule<SpaghettNET.Bot.Modules.ImageModule>();
 host.AddApplicationCommandModule<SpaghettNET.Bot.Modules.UserModule>();
 host.AddApplicationCommandModule<SpaghettNET.Bot.Modules.OpenAIModelModule>();
+host.AddApplicationCommandModule<SpaghettNET.Bot.Modules.MemoryModule>();
 
 if (OperatingSystem.IsWindows())
 {

@@ -10,6 +10,8 @@ public sealed class OpenAIOptions
     public double? Temperature { get; init; }
     public int? MaxTokens { get; init; }
     public int? ContextCharacterBudget { get; init; }
+    public string? MemoryModel { get; init; }
+    public int? MemoryCharacterBudget { get; init; }
     public IReadOnlyList<OpenAIChatToolOptions>? Tools { get; init; }
 }
 
