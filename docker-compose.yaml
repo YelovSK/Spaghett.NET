@@ -1,5 +1,7 @@
 services:
   spaghettnet:
+    group_add:
+      - "${DATA_GROUP_ID:-10}"
     build:
       context: .
     container_name: spaghettnet
@@ -15,7 +17,7 @@ services:
       OpenAI__MaxTokens: ${OPENAI_MAX_TOKENS}
       OpenAI__ContextCharacterBudget: ${OPENAI_CONTEXT_CHARACTER_BUDGET:-32000}
       OpenAI__MemoryModel: ${OPENAI_MEMORY_MODEL:-}
-      OpenAI__MemoryCharacterBudget: ${OPENAI_MEMORY_CHARACTER_BUDGET:-40000}
+      OpenAI__MemoryCharacterBudget: ${OPENAI_MEMORY_CHARACTER_BUDGET:-60000}
       OpenAI__Tools__0__Type: ${OPENAI_TOOL_0_TYPE:-}
       OpenAI__Tools__1__Type: ${OPENAI_TOOL_1_TYPE:-}
     volumes:
