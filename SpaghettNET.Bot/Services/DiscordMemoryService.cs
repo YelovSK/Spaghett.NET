@@ -720,6 +720,34 @@ public sealed class DiscordMemoryService(
         return removed > 0;
     }
 
+    /// <summary>The newest memories eligible for recall, newest first.</summary>
+    public async Task<IReadOnlyList<DiscordMemory>> GetLatestMemoriesAsync(
+        ulong guildId,
+        int count,
+        CancellationToken cancellationToken = default)
+    {
+        await using var dbContext = await dbContextFactory.CreateDbContextAsync(cancellationToken);
+        var excludedChannelIds = dbContext.DiscordMemoryExcludedChannels
+            .Where(channel => channel.GuildId == guildId)
+            .Select(channel => channel.Id);
+        return await dbContext.DiscordMemories
+            .AsNoTracking()
+            .Where(memory => memory.GuildId == guildId &&
+                             !excludedChannelIds.Contains(memory.ChannelId))
+            // Snowflakes are ordered by creation time, and SQLite cannot sort a DateTimeOffset.
+            .OrderByDescending(memory => memory.MessageId)
+            .Take(count)
+            .ToListAsync(cancellationToken);
+    }
+
+    public async Task<int> CountMemoriesAsync(ulong guildId, CancellationToken cancellationToken = default)
+    {
+        await using var dbContext = await dbContextFactory.CreateDbContextAsync(cancellationToken);
+        return await dbContext.DiscordMemories.CountAsync(
+            memory => memory.GuildId == guildId,
+            cancellationToken);
+    }
+
     public async Task<IReadOnlyList<(ulong ChannelId, string ChannelName)>> GetExcludedChannelsAsync(
         ulong guildId,
         CancellationToken cancellationToken = default)

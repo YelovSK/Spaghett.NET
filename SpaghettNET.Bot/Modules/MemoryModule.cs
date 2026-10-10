@@ -17,6 +17,57 @@ public class MemoryModule(
 {
     private const int DefaultMessageCount = 50;
     private const int MaximumMessageCount = 100;
+    private const int DefaultListCount = 20;
+    private const int MaximumListCount = 50;
+    private const int MaximumMemoryLength = 90;
+    // Discord caps a message at 2000 characters; the rest is the header and newlines.
+    private const int ListCharacterBudget = 1800;
+
+    [SubSlashCommand("list", "Shows the most recent memories")]
+    public Task List(
+        [SlashCommandParameter(
+            Description = "How many to try to show (1-50)",
+            MinValue = 1,
+            MaxValue = MaximumListCount)]
+        int count = DefaultListCount) =>
+        RespondAsync(async guildId =>
+        {
+            var memories = await memoryService.GetLatestMemoriesAsync(guildId, count);
+            if (memories.Count == 0)
+            {
+                return "Nothing has been remembered yet.";
+            }
+
+            var total = await memoryService.CountMemoriesAsync(guildId);
+            var lines = new List<string>();
+            var characters = 0;
+            foreach (var memory in memories)
+            {
+                var line = $"<t:{memory.CreatedAt.ToUnixTimeSeconds()}:R> **{memory.AuthorName}** " +
+                           $"in <#{memory.ChannelId}>: {Truncate(memory.Content, MaximumMemoryLength)}";
+                if (characters + line.Length > ListCharacterBudget)
+                {
+                    break;
+                }
+
+                lines.Add(line);
+                characters += line.Length + Environment.NewLine.Length;
+            }
+
+            var shown = $"Showing {lines.Count} of {total} remembered messages";
+            if (lines.Count < memories.Count)
+            {
+                shown += $" ({memories.Count - lines.Count} more would not fit)";
+            }
+
+            return $"{shown}:{Environment.NewLine}{string.Join(Environment.NewLine, lines)}";
+        });
+
+    private static string Truncate(string value, int length)
+    {
+        var singleLine = value.ReplaceLineEndings(" ").Trim();
+        return singleLine.Length <= length ? singleLine : singleLine[..length] + "…";
+    }
 
     [SubSlashCommand("exclude", "Stops remembering and recalling messages from a channel")]
     public Task Exclude(

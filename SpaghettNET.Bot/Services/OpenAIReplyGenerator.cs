@@ -44,7 +44,11 @@ public partial class OpenAIReplyGenerator(
             {
                 memories = await memoryService.RecallAsync(
                     message,
-                    string.Join(Environment.NewLine, messageContext.Messages.Select(FormatContextMessage)),
+                    string.Join(
+                        Environment.NewLine,
+                        messageContext.Messages
+                            .Where(contextMessage => !contextMessage.IsBot)
+                            .Select(FormatContextMessage)),
                     messageContext.Messages.Select(contextMessage => contextMessage.Id).ToHashSet(),
                     cancellationToken);
             }
@@ -455,6 +459,7 @@ public partial class OpenAIReplyGenerator(
             id,
             createdAt,
             GetAuthorName(author),
+            author.IsBot,
             FormatContextMessageContent(content, attachments),
             GetImageInputs(createdAt, attachments).ToArray());
 
@@ -485,6 +490,7 @@ public partial class OpenAIReplyGenerator(
         ulong Id,
         DateTimeOffset SentAt,
         string AuthorName,
+        bool IsBot,
         string Content,
         IReadOnlyList<OpenAIImageInput> ImageInputs);
 
