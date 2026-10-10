@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Text.Json;
 using System.Text.RegularExpressions;
 using Microsoft.Extensions.Logging;
 using NetCord;
@@ -14,10 +15,12 @@ public partial class OpenAIReplyGenerator(
     ModelMetadataResolver modelMetadataResolver,
     OpenAIChatClient chatClient,
     DiscordMemoryService memoryService,
+    IEnumerable<IChatFunctionTool> functionTools,
     ILogger<OpenAIReplyGenerator> logger)
 {
     private const int ContextBootstrapDivisor = 2;
     private const int MaxContextImages = 4;
+    private const int MaxToolRounds = 5;
     private readonly ConcurrentDictionary<ulong, ChannelContext> _channelContexts = [];
 
     [GeneratedRegex(@"<(?<name>[A-Za-z0-9_]+)>")]
@@ -62,7 +65,7 @@ public partial class OpenAIReplyGenerator(
             }
 
             messageContext = messageContext with { Memories = memories };
-            var response = await GetChatResponseAsync(messageContext, cancellationToken);
+            var response = await GetChatResponseAsync(message, messageContext, cancellationToken);
 
             if (string.IsNullOrWhiteSpace(response))
             {
@@ -84,6 +87,7 @@ public partial class OpenAIReplyGenerator(
     }
 
     private async Task<string?> GetChatResponseAsync(
+        Message message,
         OpenAIMessageContext messageContext,
         CancellationToken cancellationToken)
     {
@@ -108,21 +112,77 @@ public partial class OpenAIReplyGenerator(
             return null;
         }
 
-        var tools = BuildTools(options.Tools);
+        var tools = BuildTools();
         var imageInputs = messageContext.Messages
             .SelectMany(contextMessage => contextMessage.ImageInputs)
             .OrderByDescending(imageInput => imageInput.SentAt)
             .Take(MaxContextImages)
             .ToArray();
         var supportedImageInputs = await GetSupportedImageInputsAsync(model, imageInputs, cancellationToken);
-        var chatRequest = new OpenAIChatRequest(
-            model,
-            BuildMessages(systemPrompt, messageContext, supportedImageInputs),
-            options.Temperature,
-            options.MaxTokens,
-            tools);
+        var messages = BuildMessages(systemPrompt, messageContext, supportedImageInputs);
 
-        return await chatClient.GetResponseAsync(chatRequest, messageContext.SessionId, cancellationToken);
+        for (var round = 0; round < MaxToolRounds; round++)
+        {
+            var chatRequest = new OpenAIChatRequest(
+                model,
+                messages,
+                options.Temperature,
+                options.MaxTokens,
+                tools);
+
+            var reply = await chatClient.GetResponseAsync(chatRequest, messageContext.SessionId, cancellationToken);
+            if (reply?.ToolCalls is not { Count: > 0 } toolCalls)
+            {
+                return (reply?.Content as string)?.Trim();
+            }
+
+            messages.Add(reply);
+            foreach (var toolCall in toolCalls)
+            {
+                var result = await InvokeToolAsync(toolCall, message, cancellationToken);
+                messages.Add(new OpenAIChatMessage("tool", result, ToolCallId: toolCall.Id));
+            }
+        }
+
+        logger.LogWarning(
+            "OpenAI-compatible chat gave up after {MaxToolRounds} tool rounds. MessageId: {MessageId}",
+            MaxToolRounds,
+            message.Id);
+        return null;
+    }
+
+    private async Task<string> InvokeToolAsync(
+        OpenAIToolCall toolCall,
+        Message message,
+        CancellationToken cancellationToken)
+    {
+        var tool = functionTools.FirstOrDefault(candidate => candidate.Name == toolCall.Function.Name);
+        if (tool is null)
+        {
+            logger.LogWarning("Model called unknown tool {ToolName}.", toolCall.Function.Name);
+            return $"Unknown tool: {toolCall.Function.Name}";
+        }
+
+        try
+        {
+            // Some models send an empty string instead of {} for tools without parameters.
+            using var arguments = JsonDocument.Parse(
+                string.IsNullOrWhiteSpace(toolCall.Function.Arguments) ? "{}" : toolCall.Function.Arguments);
+            return await tool.InvokeAsync(arguments.RootElement, message, cancellationToken);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(
+                ex,
+                "Tool {ToolName} failed. Arguments: {Arguments}",
+                toolCall.Function.Name,
+                toolCall.Function.Arguments);
+            return "The tool failed.";
+        }
     }
 
     private async Task<string> InsertEmoteTokensAsync(Message sourceMessage, string response)
@@ -305,7 +365,7 @@ public partial class OpenAIReplyGenerator(
         return Path.GetFullPath(configuredPath);
     }
 
-    private static IReadOnlyList<OpenAIChatMessage> BuildMessages(
+    private static List<OpenAIChatMessage> BuildMessages(
         string systemPrompt,
         OpenAIMessageContext messageContext,
         IReadOnlyList<OpenAIImageInput>? imageInputs)
@@ -320,12 +380,15 @@ public partial class OpenAIReplyGenerator(
     private static string FormatContextMessage(OpenAIContextMessage message) =>
         $"[{message.SentAt.ToUniversalTime():yyyy-MM-dd HH:mm:ss 'UTC'}] {message.AuthorName}: {message.Content}";
 
-    private static IReadOnlyList<OpenAIChatTool>? BuildTools(IReadOnlyList<OpenAIChatToolOptions>? toolOptions)
+    private IReadOnlyList<OpenAIChatTool>? BuildTools()
     {
-        var tools = toolOptions?
+        var serverTools = (options.Tools ?? [])
             .Where(tool => !string.IsNullOrWhiteSpace(tool.Type))
-            .Select(tool => new OpenAIChatTool(tool.Type!))
-            .ToArray();
+            .Select(tool => new OpenAIChatTool(tool.Type!));
+        var localTools = functionTools.Select(tool => new OpenAIChatTool(
+            "function",
+            new OpenAIChatFunction(tool.Name, tool.Description, tool.Parameters)));
+        var tools = serverTools.Concat(localTools).ToArray();
 
         return tools is { Length: > 0 } ? tools : null;
     }
