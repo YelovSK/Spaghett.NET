@@ -75,6 +75,7 @@ host.AddApplicationCommandModule<SpaghettNET.Bot.Modules.ImageModule>();
 host.AddApplicationCommandModule<SpaghettNET.Bot.Modules.UserModule>();
 host.AddApplicationCommandModule<SpaghettNET.Bot.Modules.OpenAIModelModule>();
 host.AddApplicationCommandModule<SpaghettNET.Bot.Modules.MemoryModule>();
+host.AddApplicationCommandModule<SpaghettNET.Bot.Modules.ScriptModule>();
 
 if (OperatingSystem.IsWindows())
 {
