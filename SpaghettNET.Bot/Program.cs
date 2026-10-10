@@ -23,7 +23,7 @@ var builder = Host.CreateApplicationBuilder(new HostApplicationBuilderSettings
 builder.Services
     .AddDiscordGateway(options =>
     {
-        options.Intents = GatewayIntents.Guilds | GatewayIntents.GuildMessages | GatewayIntents.DirectMessages | GatewayIntents.MessageContent | GatewayIntents.GuildPresences;
+        options.Intents = GatewayIntents.Guilds | GatewayIntents.GuildMessages | GatewayIntents.DirectMessages | GatewayIntents.MessageContent | GatewayIntents.GuildPresences | GatewayIntents.GuildEmojisAndStickers;
     })
     .AddApplicationCommands()
     .AddGatewayHandlers(typeof(Program).Assembly)
@@ -32,6 +32,7 @@ builder.Services
     .AddSingleton<ModelMetadataResolver>()
     .AddSingleton<DiscordMemoryService>()
     .AddSingleton<OpenAIReplyGenerator>()
+    .AddSingleton<DiscordMessageSender>()
     .AddSingleton<ScriptService>()
     .AddSingleton<IChatFunctionTool, CreateScriptTool>()
     .AddSingleton<IChatFunctionTool, UpdateScriptTool>()

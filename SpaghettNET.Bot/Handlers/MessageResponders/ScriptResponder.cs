@@ -12,6 +12,7 @@ public class ScriptResponder(
     GatewayClient gatewayClient,
     ScriptService scriptService,
     OpenAIReplyGenerator replyGenerator,
+    DiscordMessageSender messageSender,
     ILogger<ScriptResponder> logger) : IMessageCreateResponder
 {
     // Scripts run once in ShouldRespondAsync so the handler only shows typing when they actually do something;
@@ -60,7 +61,7 @@ public class ScriptResponder(
                         break;
 
                     case ScriptActionKind.Send:
-                        await SendAsync(action.ChannelId!.Value, action.Text!);
+                        await messageSender.SendAsync(action.ChannelId!.Value, action.Text!);
                         break;
 
                     case ScriptActionKind.LlmReply:
@@ -74,7 +75,7 @@ public class ScriptResponder(
                     case ScriptActionKind.LlmSend:
                         if (await replyGenerator.GetReplyAsync(message, action.Text) is { } generated)
                         {
-                            await SendAsync(action.ChannelId!.Value, generated);
+                            await messageSender.SendAsync(action.ChannelId!.Value, generated);
                         }
 
                         break;
@@ -114,14 +115,6 @@ public class ScriptResponder(
             deleted ? MessageResponseType.ChannelMessage : MessageResponseType.Reply,
             replies.Count > 0 ? string.Join(Environment.NewLine, replies) : null,
             StopProcessing: true);
-    }
-
-    private async Task SendAsync(ulong channelId, string text)
-    {
-        foreach (var chunk in MessageCreateHandler.SplitToDiscordMessageLimit(text))
-        {
-            await gatewayClient.Rest.SendMessageAsync(channelId, chunk);
-        }
     }
 
     /// <summary>Unicode emoji are kept as-is, server emotes arrive as name:id.</summary>

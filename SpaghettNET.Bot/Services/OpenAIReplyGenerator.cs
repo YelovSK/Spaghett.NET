@@ -23,9 +23,6 @@ public partial class OpenAIReplyGenerator(
     private const int MaxToolRounds = 5;
     private readonly ConcurrentDictionary<ulong, ChannelContext> _channelContexts = [];
 
-    [GeneratedRegex(@"<(?<name>[A-Za-z0-9_]+)>")]
-    private static partial Regex EmoteRegex();
-
     [GeneratedRegex(@"<a?:(?<name>[A-Za-z0-9_]+):\d+>")]
     private static partial Regex DiscordEmoteRegex();
 
@@ -34,7 +31,7 @@ public partial class OpenAIReplyGenerator(
         !string.IsNullOrWhiteSpace(runtimeSettings.Model) &&
         !string.IsNullOrWhiteSpace(options.SystemPromptPath);
 
-    /// <param name="instruction">Extra instruction for this reply only, e.g. from a message rule.</param>
+    /// <param name="instruction">Extra instruction for this reply only, e.g. from a script.</param>
     public async Task<string?> GetReplyAsync(
         Message message,
         string? instruction = null,
@@ -82,7 +79,7 @@ public partial class OpenAIReplyGenerator(
                 return null;
             }
 
-            return await InsertEmoteTokensAsync(message, response);
+            return response;
         }
         finally
         {
@@ -193,44 +190,6 @@ public partial class OpenAIReplyGenerator(
         }
     }
 
-    private async Task<string> InsertEmoteTokensAsync(Message sourceMessage, string response)
-    {
-        if (sourceMessage.GuildId is not { } guildId)
-        {
-            return response;
-        }
-
-        var matches = EmoteRegex().Matches(response);
-        if (matches.Count == 0)
-        {
-            return response;
-        }
-
-        var requestedEmoteNames = matches
-            .Select(match => match.Groups["name"].Value)
-            .ToHashSet(StringComparer.InvariantCultureIgnoreCase);
-
-        var emojis = await gatewayClient.Rest.GetGuildEmojisAsync(guildId);
-        var emoteTokens = emojis
-            .Where(emoji => emoji.Available != false)
-            .Where(emoji => requestedEmoteNames.Contains(emoji.Name))
-            .GroupBy(emoji => emoji.Name, StringComparer.InvariantCultureIgnoreCase)
-            .ToDictionary(
-                group => group.Key,
-                group =>
-                {
-                    var emoji = group.First();
-                    return emoji.Animated
-                        ? $"<a:{emoji.Name}:{emoji.Id}>"
-                        : $"<:{emoji.Name}:{emoji.Id}>";
-                },
-                StringComparer.InvariantCultureIgnoreCase);
-
-        return EmoteRegex().Replace(response, match =>
-            emoteTokens.TryGetValue(match.Groups["name"].Value, out var token)
-                ? token
-                : match.Value);
-    }
 
     private async Task<OpenAIMessageContext> GetContextMessagesAsync(
         Message message,

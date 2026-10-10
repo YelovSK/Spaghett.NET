@@ -33,6 +33,7 @@ public sealed class CreateScriptTool(ScriptService scriptService) : IChatFunctio
                                         like llmReply, but posted as a new message in another channel
           api.store.get(key) / api.store.set(key, value)
                                         persistent JSON state for this script; set(key, undefined) removes the key
+        Write server emotes in text as <emote_name>, same as in chat.
         Plain JS only: no network, timers, or imports. Each event gets 50ms. Use member ids or names you looked up
         instead of guessing, and filter with regexes like /\bword\b/i.
 
