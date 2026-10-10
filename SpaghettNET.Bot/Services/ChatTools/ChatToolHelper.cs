@@ -18,21 +18,28 @@ internal static partial class ChatToolHelper
 
     private const int MaxUserCandidates = 10;
 
-    /// <summary>Resolves a channel id, mention or name. The error tells the model how to recover.</summary>
-    public static (ulong? Id, string? Error) ResolveChannel(Message message, string channel)
+    /// <summary>
+    /// Resolves a channel id, mention or name to a channel of this server only, so ids from other servers the bot
+    /// is in can't be used. The error tells the model how to recover.
+    /// </summary>
+    public static (IGuildChannel? Channel, string? Error) ResolveChannel(Guild guild, string channel)
     {
+        IGuildChannel? found;
         if (ChannelRegex().Match(channel) is { Success: true } match)
         {
-            return (ulong.Parse(match.Groups["id"].Value), null);
+            found = guild.Channels.GetValueOrDefault(ulong.Parse(match.Groups["id"].Value));
+        }
+        else
+        {
+            // Models often write "random thought" for #random-thought.
+            var name = channel.TrimStart('#').Trim().Replace(' ', '-');
+            found = guild.Channels.Values.FirstOrDefault(candidate =>
+                string.Equals(candidate.Name, name, StringComparison.InvariantCultureIgnoreCase));
         }
 
-        // Models often write "random thought" for #random-thought.
-        var name = channel.TrimStart('#').Trim().Replace(' ', '-');
-        var found = message.Guild?.Channels.Values.FirstOrDefault(candidate =>
-            string.Equals(candidate.Name, name, StringComparison.InvariantCultureIgnoreCase));
         return found is not null
-            ? (found.Id, null)
-            : (null, $"No channel named {channel}. Call list_channels to see the real names.");
+            ? (found, null)
+            : (null, $"No channel {channel} in this server. Call list_channels to see the real names.");
     }
 
     /// <summary>Resolves a user id, mention or name. The error tells the model how to recover.</summary>

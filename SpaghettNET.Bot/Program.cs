@@ -1,6 +1,7 @@
 using SpaghettNET.Bot.Handlers.MessageResponders;
 using SpaghettNET.Bot.Services;
 using SpaghettNET.Bot.Services.ChatTools;
+using SpaghettNET.Bot.Services.Scripting;
 using SpaghettNET.Platform.Services;
 using SpaghettNET.Persistence;
 using Microsoft.Data.Sqlite;
@@ -31,17 +32,18 @@ builder.Services
     .AddSingleton<ModelMetadataResolver>()
     .AddSingleton<DiscordMemoryService>()
     .AddSingleton<OpenAIReplyGenerator>()
-    .AddSingleton<MessageRuleService>()
-    .AddSingleton<IChatFunctionTool, CreateMessageRuleTool>()
-    .AddSingleton<IChatFunctionTool, ListMessageRulesTool>()
-    .AddSingleton<IChatFunctionTool, DeleteMessageRuleTool>()
+    .AddSingleton<ScriptService>()
+    .AddSingleton<IChatFunctionTool, CreateScriptTool>()
+    .AddSingleton<IChatFunctionTool, UpdateScriptTool>()
+    .AddSingleton<IChatFunctionTool, ListScriptsTool>()
+    .AddSingleton<IChatFunctionTool, DeleteScriptTool>()
     .AddSingleton<IChatFunctionTool, FindMemberTool>()
     .AddSingleton<IChatFunctionTool, ListMembersTool>()
     .AddSingleton<IChatFunctionTool, TimeoutMemberTool>()
     .AddSingleton<IChatFunctionTool, ReadChannelTool>()
     .AddSingleton<IChatFunctionTool, ListChannelsTool>()
-    // Rules go first so pinging the bot can't skip them.
-    .AddSingleton<IMessageCreateResponder, MessageRuleResponder>()
+    // Scripts go first so pinging the bot can't skip them.
+    .AddSingleton<IMessageCreateResponder, ScriptResponder>()
     .AddSingleton<IMessageCreateResponder, OpenAIMessageResponder>()
     .AddSingleton<IMessageCreateResponder, SpecialWordResponder>()
     .AddSingleton<IMessageCreateResponder, EveryoneMentionResponder>()

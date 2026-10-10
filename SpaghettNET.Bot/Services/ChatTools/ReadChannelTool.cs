@@ -41,11 +41,13 @@ public sealed class ReadChannelTool(GatewayClient gatewayClient) : IChatFunction
             return "channel is required.";
         }
 
-        var (resolvedId, error) = ChatToolHelper.ResolveChannel(message, channel);
-        if (resolvedId is not { } channelId)
+        var (resolved, error) = ChatToolHelper.ResolveChannel(guild, channel);
+        if (resolved is null)
         {
             return error!;
         }
+
+        var channelId = resolved.Id;
 
         // The bot may see channels the asker can't, so it must not read them out.
         var permissions = author.GetChannelPermissions(guild, channelId);

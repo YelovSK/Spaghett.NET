@@ -17,7 +17,7 @@ public class BotContext : DbContext
     public DbSet<DiscordMemoryEvaluation> DiscordMemoryEvaluations { get; set; }
     public DbSet<DiscordMemoryBackfillCursor> DiscordMemoryBackfillCursors { get; set; }
     public DbSet<DiscordMemoryExcludedChannel> DiscordMemoryExcludedChannels { get; set; }
-    public DbSet<MessageRule> MessageRules { get; set; }
+    public DbSet<BotScript> BotScripts { get; set; }
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {

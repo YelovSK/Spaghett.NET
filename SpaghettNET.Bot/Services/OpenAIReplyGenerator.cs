@@ -451,8 +451,8 @@ public partial class OpenAIReplyGenerator(
             contentParts.Add(new OpenAIChatContentPart(
                 "text",
                 Text: Environment.NewLine +
-                      "A rule set up by a server admin fired on the latest message. " +
-                      "Reply to that message following this instruction: " +
+                      "A script set up by a server admin fired on the latest message. " +
+                      "Write your message following this instruction: " +
                       messageContext.Instruction));
         }
 
