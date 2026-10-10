@@ -87,30 +87,59 @@ public class MessageCreateHandler(
 
     private async Task SendResponseAsync(Message sourceMessage, MessageResponseType responseType, string content)
     {
-        var trimmedContent = TrimToDiscordMessageLimit(content);
+        var chunks = SplitToDiscordMessageLimit(content);
 
         switch (responseType)
         {
             case MessageResponseType.Reply:
-                await sourceMessage.ReplyAsync(trimmedContent);
+                await sourceMessage.ReplyAsync(chunks[0]);
                 break;
 
             case MessageResponseType.ChannelMessage:
-                await gatewayClient.Rest.SendMessageAsync(sourceMessage.ChannelId, new MessageProperties
-                {
-                    Content = trimmedContent,
-                });
+                await gatewayClient.Rest.SendMessageAsync(sourceMessage.ChannelId, chunks[0]);
                 break;
 
             default:
                 throw new ArgumentOutOfRangeException(nameof(responseType), responseType, "Unknown message response type.");
         }
+
+        // Only the first chunk is a reply, so the rest don't each ping the author.
+        foreach (var chunk in chunks.Skip(1))
+        {
+            await gatewayClient.Rest.SendMessageAsync(sourceMessage.ChannelId, chunk);
+        }
     }
 
-    private static string TrimToDiscordMessageLimit(string response) =>
-        response.Length <= 2000
-            ? response
-            : response[..1997] + "...";
+    internal static List<string> SplitToDiscordMessageLimit(string content, int limit = 2000)
+    {
+        var chunks = new List<string>();
+        var remaining = content.AsSpan().Trim();
+
+        while (remaining.Length > limit)
+        {
+            var window = remaining[..limit];
+            var cut = window.LastIndexOf('\n');
+            if (cut <= 0)
+            {
+                cut = window.LastIndexOf(' ');
+            }
+
+            if (cut <= 0)
+            {
+                cut = limit;
+            }
+
+            chunks.Add(remaining[..cut].TrimEnd().ToString());
+            remaining = remaining[cut..].TrimStart();
+        }
+
+        if (remaining.Length > 0 || chunks.Count == 0)
+        {
+            chunks.Add(remaining.ToString());
+        }
+
+        return chunks;
+    }
 
     private async Task RunWithTypingIndicatorAsync(ulong channelId, Func<Task> action)
     {
