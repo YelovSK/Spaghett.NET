@@ -17,6 +17,7 @@ public class BotContext : DbContext
     public DbSet<DiscordMemoryEvaluation> DiscordMemoryEvaluations { get; set; }
     public DbSet<DiscordMemoryBackfillCursor> DiscordMemoryBackfillCursors { get; set; }
     public DbSet<DiscordMemoryExcludedChannel> DiscordMemoryExcludedChannels { get; set; }
+    public DbSet<MessageRule> MessageRules { get; set; }
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -36,7 +37,7 @@ public class BotContext : DbContext
         foreach (var property in modelBuilder.Model
                      .GetEntityTypes()
                      .SelectMany(entityType => entityType.GetProperties())
-                     .Where(property => property.ClrType == typeof(ulong)))
+                     .Where(property => property.ClrType == typeof(ulong) || property.ClrType == typeof(ulong?)))
         {
             property.SetValueConverter(snowflakeConverter);
         }

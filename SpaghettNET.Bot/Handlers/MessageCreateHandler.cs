@@ -46,9 +46,9 @@ public class MessageCreateHandler(
                     {
                         response = await responder.GetResponseAsync(message);
 
-                        if (response is not null)
+                        if (response?.Content is { } content)
                         {
-                            await SendResponseAsync(message, response);
+                            await SendResponseAsync(message, response.ResponseType, content);
                         }
                     });
 
@@ -85,11 +85,11 @@ public class MessageCreateHandler(
         await dbContext.SaveChangesAsync();
     }
 
-    private async Task SendResponseAsync(Message sourceMessage, MessageCreateResponse response)
+    private async Task SendResponseAsync(Message sourceMessage, MessageResponseType responseType, string content)
     {
-        var trimmedContent = TrimToDiscordMessageLimit(response.Content);
+        var trimmedContent = TrimToDiscordMessageLimit(content);
 
-        switch (response.ResponseType)
+        switch (responseType)
         {
             case MessageResponseType.Reply:
                 await sourceMessage.ReplyAsync(trimmedContent);
@@ -103,7 +103,7 @@ public class MessageCreateHandler(
                 break;
 
             default:
-                throw new ArgumentOutOfRangeException(nameof(response), response.ResponseType, "Unknown message response type.");
+                throw new ArgumentOutOfRangeException(nameof(responseType), responseType, "Unknown message response type.");
         }
     }
 

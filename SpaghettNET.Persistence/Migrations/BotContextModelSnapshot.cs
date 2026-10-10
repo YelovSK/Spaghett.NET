@@ -165,6 +165,50 @@ namespace SpaghettNET.Persistence.Migrations
                     b.ToTable("DiscordMemoryExcludedChannels");
                 });
 
+            modelBuilder.Entity("SpaghettNET.Persistence.Models.MessageRule", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int>("Action")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<double?>("Chance")
+                        .HasColumnType("REAL");
+
+                    b.Property<long?>("ChannelId")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<long>("CreatedById")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<DateTimeOffset?>("ExpiresAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<long>("GuildId")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("Pattern")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Text")
+                        .HasColumnType("TEXT");
+
+                    b.Property<int?>("TimeoutSeconds")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<long?>("UserId")
+                        .HasColumnType("INTEGER");
+
+                    b.HasKey("Id");
+
+                    b.ToTable("MessageRules");
+                });
+
             modelBuilder.Entity("SpaghettNET.Persistence.Models.User", b =>
                 {
                     b.Property<long>("Id")

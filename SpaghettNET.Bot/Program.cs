@@ -1,5 +1,6 @@
 using SpaghettNET.Bot.Handlers.MessageResponders;
 using SpaghettNET.Bot.Services;
+using SpaghettNET.Bot.Services.ChatTools;
 using SpaghettNET.Platform.Services;
 using SpaghettNET.Persistence;
 using Microsoft.Data.Sqlite;
@@ -21,7 +22,7 @@ var builder = Host.CreateApplicationBuilder(new HostApplicationBuilderSettings
 builder.Services
     .AddDiscordGateway(options =>
     {
-        options.Intents = GatewayIntents.Guilds | GatewayIntents.GuildMessages | GatewayIntents.DirectMessages | GatewayIntents.MessageContent;
+        options.Intents = GatewayIntents.Guilds | GatewayIntents.GuildMessages | GatewayIntents.DirectMessages | GatewayIntents.MessageContent | GatewayIntents.GuildPresences;
     })
     .AddApplicationCommands()
     .AddGatewayHandlers(typeof(Program).Assembly)
@@ -30,6 +31,17 @@ builder.Services
     .AddSingleton<ModelMetadataResolver>()
     .AddSingleton<DiscordMemoryService>()
     .AddSingleton<OpenAIReplyGenerator>()
+    .AddSingleton<MessageRuleService>()
+    .AddSingleton<IChatFunctionTool, CreateMessageRuleTool>()
+    .AddSingleton<IChatFunctionTool, ListMessageRulesTool>()
+    .AddSingleton<IChatFunctionTool, DeleteMessageRuleTool>()
+    .AddSingleton<IChatFunctionTool, FindMemberTool>()
+    .AddSingleton<IChatFunctionTool, ListMembersTool>()
+    .AddSingleton<IChatFunctionTool, TimeoutMemberTool>()
+    .AddSingleton<IChatFunctionTool, ReadChannelTool>()
+    .AddSingleton<IChatFunctionTool, ListChannelsTool>()
+    // Rules go first so pinging the bot can't skip them.
+    .AddSingleton<IMessageCreateResponder, MessageRuleResponder>()
     .AddSingleton<IMessageCreateResponder, OpenAIMessageResponder>()
     .AddSingleton<IMessageCreateResponder, SpecialWordResponder>()
     .AddSingleton<IMessageCreateResponder, EveryoneMentionResponder>()

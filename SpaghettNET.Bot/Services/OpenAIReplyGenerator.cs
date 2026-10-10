@@ -34,7 +34,11 @@ public partial class OpenAIReplyGenerator(
         !string.IsNullOrWhiteSpace(runtimeSettings.Model) &&
         !string.IsNullOrWhiteSpace(options.SystemPromptPath);
 
-    public async Task<string?> GetReplyAsync(Message message, CancellationToken cancellationToken = default)
+    /// <param name="instruction">Extra instruction for this reply only, e.g. from a message rule.</param>
+    public async Task<string?> GetReplyAsync(
+        Message message,
+        string? instruction = null,
+        CancellationToken cancellationToken = default)
     {
         var channelContext = _channelContexts.GetOrAdd(message.ChannelId, static _ => new ChannelContext());
         await channelContext.Lock.WaitAsync(cancellationToken);
@@ -64,7 +68,7 @@ public partial class OpenAIReplyGenerator(
                 logger.LogWarning(ex, "Discord memory recall failed; continuing without memories.");
             }
 
-            messageContext = messageContext with { Memories = memories };
+            messageContext = messageContext with { Memories = memories, Instruction = instruction };
             var response = await GetChatResponseAsync(message, messageContext, cancellationToken);
 
             if (string.IsNullOrWhiteSpace(response))
@@ -181,7 +185,11 @@ public partial class OpenAIReplyGenerator(
                 "Tool {ToolName} failed. Arguments: {Arguments}",
                 toolCall.Function.Name,
                 toolCall.Function.Arguments);
-            return "The tool failed.";
+
+            // Discord's errors are safe to show and tell the model what went wrong; anything else could leak internals.
+            return ex is RestException
+                ? $"Discord refused the request: {ex.Message}"
+                : "The tool failed.";
         }
     }
 
@@ -280,7 +288,8 @@ public partial class OpenAIReplyGenerator(
             messages,
             channelContext.CacheBreakpointMessageId!.Value,
             $"discord:{message.ChannelId}:{channelContext.AnchorMessageId}",
-            []);
+            [],
+            null);
     }
 
     private static List<OpenAIContextMessage> TakeNewestMessages(
@@ -377,6 +386,9 @@ public partial class OpenAIReplyGenerator(
         ];
     }
 
+    /// <summary>Formats a message the same way the reply context does.</summary>
+    internal static string FormatMessage(RestMessage message) => FormatContextMessage(CreateContextMessage(message));
+
     private static string FormatContextMessage(OpenAIContextMessage message) =>
         $"[{message.SentAt.ToUniversalTime():yyyy-MM-dd HH:mm:ss 'UTC'}] {message.AuthorName}: {message.Content}";
 
@@ -434,6 +446,16 @@ public partial class OpenAIReplyGenerator(
                       string.Join(Environment.NewLine, messageContext.Memories)));
         }
 
+        if (!string.IsNullOrWhiteSpace(messageContext.Instruction))
+        {
+            contentParts.Add(new OpenAIChatContentPart(
+                "text",
+                Text: Environment.NewLine +
+                      "A rule set up by a server admin fired on the latest message. " +
+                      "Reply to that message following this instruction: " +
+                      messageContext.Instruction));
+        }
+
         return contentParts;
     }
 
@@ -479,7 +501,6 @@ public partial class OpenAIReplyGenerator(
     {
         var kind = attachment switch
         {
-            ImageAttachment => "image",
             VoiceAttachment => "voice",
             _ when attachment.ContentType?.StartsWith("image/", StringComparison.InvariantCultureIgnoreCase) == true => "image",
             _ when attachment.ContentType?.StartsWith("video/", StringComparison.InvariantCultureIgnoreCase) == true => "video",
@@ -536,8 +557,8 @@ public partial class OpenAIReplyGenerator(
             .Select(attachment => new OpenAIImageInput(attachment.Url, createdAt));
     }
 
+    // NetCord's ImageAttachment means "has dimensions", which includes videos, so only the content type is trusted.
     private static bool IsImageAttachment(Attachment attachment) =>
-        attachment is ImageAttachment ||
         attachment.ContentType?.StartsWith("image/", StringComparison.InvariantCultureIgnoreCase) == true;
 
     private static string GetAuthorName(User user) => user.GlobalName ?? user.Username;
@@ -547,7 +568,8 @@ public partial class OpenAIReplyGenerator(
         IReadOnlyList<OpenAIContextMessage> Messages,
         ulong CacheBreakpointMessageId,
         string SessionId,
-        IReadOnlyList<string> Memories);
+        IReadOnlyList<string> Memories,
+        string? Instruction);
 
     private sealed record OpenAIContextMessage(
         ulong Id,

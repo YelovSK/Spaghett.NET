@@ -46,6 +46,14 @@ public sealed class OpenAIChatClient(
                     "OpenAI-compatible chat request failed with status code {StatusCode}. Response body: {ResponseBody}",
                     response.StatusCode,
                     responseBody);
+
+                if (logger.IsEnabled(LogLevel.Debug))
+                {
+                    logger.LogDebug(
+                        "Failed OpenAI-compatible chat request body: {RequestBody}",
+                        await request.Content!.ReadAsStringAsync(cancellationToken));
+                }
+
                 return null;
             }
 
