@@ -11,17 +11,4 @@ public static partial class Extensions
     {
         return string.Join(separator, enumerable);
     }
-    
-    public static IEnumerable<string> SplitWords(this string text)
-    {
-        // Cuz fuck regex
-        var punctuation = text
-            .Where(char.IsPunctuation)
-            .Distinct()
-            .ToArray();
-
-        return text
-            .Split()
-            .Select(x => x.Trim(punctuation));
-    }
 }

@@ -18,7 +18,7 @@ public sealed class CreateScriptTool(ScriptService scriptService) : IChatFunctio
         Register handlers with on(event, handler). Events: "message" (any new message from someone else).
         on("message", msg => { ... }) where msg is:
           { id, content, createdAt (ms), hasAttachments,
-            author: { id, name, username, isBot }, channel: { id, name }, mentions: [userId] }
+            author: { id, name, username, isBot }, channel: { id, name }, mentions: [userId], mentionsEveryone }
         All ids are strings. author.name is what people see (nickname or display name).
 
         api (only usable inside handlers, max 10 calls per event):

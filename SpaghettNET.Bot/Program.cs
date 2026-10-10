@@ -46,10 +46,6 @@ builder.Services
     // Scripts go first so pinging the bot can't skip them.
     .AddSingleton<IMessageCreateResponder, ScriptResponder>()
     .AddSingleton<IMessageCreateResponder, OpenAIMessageResponder>()
-    .AddSingleton<IMessageCreateResponder, SpecialWordResponder>()
-    .AddSingleton<IMessageCreateResponder, EveryoneMentionResponder>()
-    .AddSingleton<IMessageCreateResponder, MessageLengthResponder>()
-    .AddSingleton<IMessageCreateResponder, CapsLockResponder>()
     .AddSingleton<ImageService>();
 
 builder.Services.AddHttpClient<OpenAIChatClient>(client =>

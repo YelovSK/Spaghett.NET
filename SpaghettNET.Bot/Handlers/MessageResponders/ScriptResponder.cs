@@ -110,11 +110,11 @@ public class ScriptResponder(
             return null;
         }
 
-        // A script that talks replaces the normal bot reply, and a deleted message can't be replied to.
+        // Script replies sit alongside the bot's other responses, but a deleted message can't be responded to.
         return new MessageCreateResponse(
             deleted ? MessageResponseType.ChannelMessage : MessageResponseType.Reply,
             replies.Count > 0 ? string.Join(Environment.NewLine, replies) : null,
-            StopProcessing: true);
+            StopProcessing: deleted);
     }
 
     /// <summary>Unicode emoji are kept as-is, server emotes arrive as name:id.</summary>

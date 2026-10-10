@@ -32,6 +32,7 @@ public static class ScriptEvents
             name = (message.Channel as INamedChannel)?.Name,
         },
         mentions = message.MentionedUsers.Select(user => user.Id.ToString()).ToArray(),
+        mentionsEveryone = message.MentionEveryone,
         hasAttachments = message.Attachments.Count > 0,
     };
 }
