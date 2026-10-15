@@ -131,7 +131,8 @@ internal sealed record OpenAIChatRequest(
     [property: JsonPropertyName("messages")] IReadOnlyList<OpenAIChatMessage> Messages,
     [property: JsonPropertyName("temperature")] double? Temperature,
     [property: JsonPropertyName("max_tokens")] int? MaxTokens,
-    [property: JsonPropertyName("tools")] IReadOnlyList<OpenAIChatTool>? Tools);
+    [property: JsonPropertyName("tools")] IReadOnlyList<OpenAIChatTool>? Tools,
+    [property: JsonPropertyName("tool_choice")] string? ToolChoice = null);
 
 internal sealed record OpenAIChatMessage(
     [property: JsonPropertyName("role")] string Role,

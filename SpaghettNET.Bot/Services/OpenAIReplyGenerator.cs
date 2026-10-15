@@ -20,7 +20,7 @@ public partial class OpenAIReplyGenerator(
 {
     private const int ContextBootstrapDivisor = 2;
     private const int MaxContextImages = 4;
-    private const int MaxToolRounds = 5;
+    private const int MaxToolRounds = 8;
     private readonly ConcurrentDictionary<ulong, ChannelContext> _channelContexts = [];
 
     [GeneratedRegex(@"<a?:(?<name>[A-Za-z0-9_]+):\d+>")]
@@ -124,12 +124,14 @@ public partial class OpenAIReplyGenerator(
 
         for (var round = 0; round < MaxToolRounds; round++)
         {
+            // Tools stay defined on the last round because some providers reject tool history without them.
             var chatRequest = new OpenAIChatRequest(
                 model,
                 messages,
                 options.Temperature,
                 options.MaxTokens,
-                tools);
+                tools,
+                tools is not null && round == MaxToolRounds - 1 ? "none" : null);
 
             var reply = await chatClient.GetResponseAsync(chatRequest, messageContext.SessionId, cancellationToken);
             if (reply?.ToolCalls is not { Count: > 0 } toolCalls)
@@ -146,7 +148,7 @@ public partial class OpenAIReplyGenerator(
         }
 
         logger.LogWarning(
-            "OpenAI-compatible chat gave up after {MaxToolRounds} tool rounds. MessageId: {MessageId}",
+            "OpenAI-compatible chat still called tools after {MaxToolRounds} rounds despite tool_choice none. MessageId: {MessageId}",
             MaxToolRounds,
             message.Id);
         return null;
@@ -169,7 +171,14 @@ public partial class OpenAIReplyGenerator(
             // Some models send an empty string instead of {} for tools without parameters.
             using var arguments = JsonDocument.Parse(
                 string.IsNullOrWhiteSpace(toolCall.Function.Arguments) ? "{}" : toolCall.Function.Arguments);
-            return await tool.InvokeAsync(arguments.RootElement, message, cancellationToken);
+            var result = await tool.InvokeAsync(arguments.RootElement, message, cancellationToken);
+            logger.LogInformation(
+                "Tool {ToolName} called. MessageId: {MessageId}, Arguments: {Arguments}, ResultLength: {ResultLength}",
+                toolCall.Function.Name,
+                message.Id,
+                toolCall.Function.Arguments,
+                result.Length);
+            return result;
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
