@@ -9,6 +9,7 @@ namespace SpaghettNET.Bot.Services;
 /// </summary>
 public sealed class DiscordMemoryRunBuffer(
     DiscordMemoryService memoryService,
+    DiscordMemoryEvaluator evaluator,
     ILogger<DiscordMemoryRunBuffer> logger)
 {
     private readonly Lock _gate = new();
@@ -66,7 +67,7 @@ public sealed class DiscordMemoryRunBuffer(
     {
         try
         {
-            await memoryService.EvaluateRunAsync(open.GuildId, open.Run);
+            await evaluator.EvaluateRunAsync(open.GuildId, open.Run);
         }
         catch (Exception ex)
         {

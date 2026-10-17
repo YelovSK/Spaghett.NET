@@ -14,7 +14,7 @@ public partial class OpenAIReplyGenerator(
     OpenAIChatRuntimeSettings runtimeSettings,
     ModelMetadataResolver modelMetadataResolver,
     OpenAIChatClient chatClient,
-    DiscordMemoryService memoryService,
+    DiscordMemoryRecall memoryRecall,
     IEnumerable<IChatFunctionTool> functionTools,
     ILogger<OpenAIReplyGenerator> logger)
 {
@@ -46,7 +46,7 @@ public partial class OpenAIReplyGenerator(
             IReadOnlyList<string> memories = [];
             try
             {
-                memories = await memoryService.RecallAsync(
+                memories = await memoryRecall.RecallAsync(
                     message,
                     string.Join(
                         Environment.NewLine,

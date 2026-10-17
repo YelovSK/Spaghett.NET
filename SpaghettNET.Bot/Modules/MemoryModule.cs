@@ -13,6 +13,7 @@ namespace SpaghettNET.Bot.Modules;
     Contexts = [InteractionContextType.Guild])]
 public class MemoryModule(
     DiscordMemoryService memoryService,
+    DiscordMemoryBackfill memoryBackfill,
     ILogger<MemoryModule> logger) : ApplicationCommandModule<ApplicationCommandContext>
 {
     private const int DefaultMessageCount = 50;
@@ -144,7 +145,7 @@ public class MemoryModule(
             }
             else
             {
-                var result = await memoryService.BackfillGuildAsync(
+                var result = await memoryBackfill.BackfillGuildAsync(
                     guildId,
                     Math.Clamp(messages, 1, MaximumMessageCount));
                 response = FormatResult(result);
