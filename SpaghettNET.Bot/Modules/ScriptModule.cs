@@ -8,7 +8,7 @@ using SpaghettNET.Persistence.Models;
 
 namespace SpaghettNET.Bot.Modules;
 
-[SlashCommand("script", "Shows the scripts the bot runs", Contexts = [InteractionContextType.Guild])]
+[SlashCommand("script", "Manages the scripts the bot runs", Contexts = [InteractionContextType.Guild])]
 public class ScriptModule(
     ScriptService scriptService,
     ILogger<ScriptModule> logger) : ApplicationCommandModule<ApplicationCommandContext>
@@ -72,6 +72,24 @@ public class ScriptModule(
             return inline.Length <= MessageBudget
                 ? new Reply(inline)
                 : new Reply($"{header}Code is too long for a message, see the attached file.", script.Code);
+        });
+
+    [SubSlashCommand("delete", "Deletes a script")]
+    public Task Delete(
+        [SlashCommandParameter(Description = "The script's number from /script list")]
+        int id) =>
+        RespondAsync(async guildId =>
+        {
+            // Discord only applies default permissions to the whole command, and list/show are for everyone.
+            if (Context.Interaction.User is not GuildInteractionUser { Permissions: var permissions } ||
+                !permissions.HasFlag(Permissions.ManageGuild))
+            {
+                return new Reply("Deleting scripts needs the Manage Server permission.");
+            }
+
+            return await scriptService.DeleteAsync(guildId, id)
+                ? new Reply($"Deleted script #{id}.")
+                : new Reply($"There is no script #{id}.");
         });
 
     private static string Status(BotScript script) =>
