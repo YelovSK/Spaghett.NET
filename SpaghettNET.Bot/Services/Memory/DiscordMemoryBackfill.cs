@@ -16,14 +16,21 @@ public sealed class DiscordMemoryBackfill(
     ILogger<DiscordMemoryBackfill> logger)
 {
     private const int BackfillBatchSize = 20;
+    // Discord's largest page.
+    private const int PageSize = 100;
     // Time goes into waiting on decision requests, so a few channels at once keeps the API busy
     // without hammering it.
     private const int MaxParallelChannels = 4;
     private const int EvaluationVersion = MemoryRetentionPolicy.Version;
 
+    /// <summary>
+    /// Walks every readable channel back to <paramref name="since"/>, continuing from where earlier
+    /// passes stopped, and evaluates what it finds for memories.
+    /// </summary>
     public async Task<DiscordMemoryGuildBackfillResult> BackfillGuildAsync(
         ulong guildId,
-        int maxMessagesPerChannel,
+        DateTimeOffset since,
+        IProgress<DiscordMemoryBackfillProgress>? progress = null,
         CancellationToken cancellationToken = default)
     {
         if (!memoryService.IsEnabled)
@@ -64,15 +71,35 @@ public sealed class DiscordMemoryBackfill(
             .ThenBy(channel => channel.Id)
             .ToArray();
 
+        var finishedChannels = 0;
+        var fetched = 0;
+        var stored = 0;
+        void Report() => progress?.Report(new DiscordMemoryBackfillProgress(
+            Volatile.Read(ref finishedChannels),
+            channels.Length,
+            Volatile.Read(ref fetched),
+            Volatile.Read(ref stored)));
+
         var results = new DiscordMemoryBackfillResult[channels.Length];
         await Parallel.ForEachAsync(
             Enumerable.Range(0, channels.Length),
             new ParallelOptions { MaxDegreeOfParallelism = MaxParallelChannels, CancellationToken = cancellationToken },
-            async (index, token) => results[index] = await TryBackfillChannelAsync(
-                guildId,
-                channels[index].Id,
-                maxMessagesPerChannel,
-                token));
+            async (index, token) =>
+            {
+                results[index] = await TryBackfillChannelAsync(
+                    guildId,
+                    channels[index].Id,
+                    since,
+                    page =>
+                    {
+                        Interlocked.Add(ref fetched, page.Fetched);
+                        Interlocked.Add(ref stored, page.Stored);
+                        Report();
+                    },
+                    token);
+                Interlocked.Increment(ref finishedChannels);
+                Report();
+            });
 
         return new DiscordMemoryGuildBackfillResult(
             channels.Length,
@@ -88,12 +115,23 @@ public sealed class DiscordMemoryBackfill(
     private async Task<DiscordMemoryBackfillResult> TryBackfillChannelAsync(
         ulong guildId,
         ulong channelId,
-        int maxMessages,
+        DateTimeOffset since,
+        Action<DiscordMemoryBackfillResult> onPage,
         CancellationToken cancellationToken)
     {
+        var total = new DiscordMemoryBackfillResult();
         try
         {
-            return await BackfillChannelAsync(guildId, channelId, maxMessages, cancellationToken);
+            while (true)
+            {
+                var (page, hasMore) = await BackfillPageAsync(guildId, channelId, since, cancellationToken);
+                total = total.Add(page);
+                onPage(page);
+                if (!hasMore)
+                {
+                    return total;
+                }
+            }
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -106,21 +144,18 @@ public sealed class DiscordMemoryBackfill(
                 "Discord memory backfill failed for channel. GuildId: {GuildId}, ChannelId: {ChannelId}",
                 guildId,
                 channelId);
-            return new DiscordMemoryBackfillResult(Failed: true);
+            return total with { Failed = true };
         }
     }
 
-    private async Task<DiscordMemoryBackfillResult> BackfillChannelAsync(
+    /// <summary>Evaluates the next page of older messages and moves the channel's cursor past it.</summary>
+    /// <returns>The page's result, and whether older messages remain to walk before <paramref name="since"/>.</returns>
+    private async Task<(DiscordMemoryBackfillResult Page, bool HasMore)> BackfillPageAsync(
         ulong guildId,
         ulong channelId,
-        int maxMessages,
-        CancellationToken cancellationToken = default)
+        DateTimeOffset since,
+        CancellationToken cancellationToken)
     {
-        if (!memoryService.IsEnabled)
-        {
-            return new DiscordMemoryBackfillResult(IsDisabled: true);
-        }
-
         await using var cursorContext = await dbContextFactory.CreateDbContextAsync(cancellationToken);
         var cursor = await cursorContext.DiscordMemoryBackfillCursors
             .SingleOrDefaultAsync(item => item.Id == channelId, cancellationToken);
@@ -128,23 +163,31 @@ public sealed class DiscordMemoryBackfill(
                                       cursor.EvaluationVersion < EvaluationVersion;
         if (cursor?.IsComplete == true && !cursorNeedsReevaluation)
         {
-            return new DiscordMemoryBackfillResult(IsComplete: true);
+            return (new DiscordMemoryBackfillResult(IsComplete: true), false);
         }
 
         var pagination = new PaginationProperties<ulong>
         {
             From = cursorNeedsReevaluation ? null : cursor?.BeforeMessageId,
             Direction = PaginationDirection.Before,
-            BatchSize = Math.Min(maxMessages, 100),
+            BatchSize = PageSize,
         };
         var fetchedMessages = new List<RestMessage>();
         var exhausted = true;
+        var reachedSince = false;
         await foreach (var message in gatewayClient.Rest
                            .GetMessagesAsync(channelId, pagination)
                            .WithCancellation(cancellationToken))
         {
+            if (message.CreatedAt < since)
+            {
+                exhausted = false;
+                reachedSince = true;
+                break;
+            }
+
             fetchedMessages.Add(message);
-            if (fetchedMessages.Count >= maxMessages)
+            if (fetchedMessages.Count >= PageSize)
             {
                 exhausted = false;
                 break;
@@ -154,8 +197,8 @@ public sealed class DiscordMemoryBackfill(
         // Discord pages newest first, but runs are read oldest first.
         var traversed = Enumerable.Reverse(fetchedMessages).ToList();
         var runs = MessageRun.Group(traversed);
-        // The oldest run may continue past this page, so leave it for the next pass to see whole.
-        if (!exhausted && runs.Count > 1)
+        // The oldest run may continue onto the next page, so leave it for that page to see whole.
+        if (!exhausted && !reachedSince && runs.Count > 1)
         {
             var heldBack = runs[0];
             runs.RemoveAt(0);
@@ -236,7 +279,7 @@ public sealed class DiscordMemoryBackfill(
             await cursorContext.SaveChangesAsync(cancellationToken);
         }
 
-        return new DiscordMemoryBackfillResult(
+        var page = new DiscordMemoryBackfillResult(
             fetched,
             evaluated,
             stored,
@@ -244,6 +287,9 @@ public sealed class DiscordMemoryBackfill(
             ignored,
             exhausted,
             failed);
+        // A page that moved nothing forward would only be fetched again.
+        var hasMore = !exhausted && !reachedSince && !failed && oldestTraversedMessageId.HasValue;
+        return (page, hasMore);
     }
 }
 
@@ -254,8 +300,24 @@ public sealed record DiscordMemoryBackfillResult(
     int AlreadyEvaluated = 0,
     int Ignored = 0,
     bool IsComplete = false,
-    bool Failed = false,
-    bool IsDisabled = false);
+    bool Failed = false)
+{
+    /// <summary>Adds a later page's counts; its flags describe where the channel now stands.</summary>
+    public DiscordMemoryBackfillResult Add(DiscordMemoryBackfillResult page) => new(
+        Fetched + page.Fetched,
+        Evaluated + page.Evaluated,
+        Stored + page.Stored,
+        AlreadyEvaluated + page.AlreadyEvaluated,
+        Ignored + page.Ignored,
+        page.IsComplete,
+        page.Failed);
+}
+
+public sealed record DiscordMemoryBackfillProgress(
+    int FinishedChannels,
+    int Channels,
+    int Fetched,
+    int Stored);
 
 public sealed record DiscordMemoryGuildBackfillResult(
     int Channels = 0,

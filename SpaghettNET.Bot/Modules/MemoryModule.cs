@@ -16,8 +16,10 @@ public class MemoryModule(
     DiscordMemoryBackfill memoryBackfill,
     ILogger<MemoryModule> logger) : ApplicationCommandModule<ApplicationCommandContext>
 {
-    private const int DefaultMessageCount = 50;
-    private const int MaximumMessageCount = 100;
+    private const int DefaultDays = 30;
+    private const int MaximumDays = 3650;
+    // Discord rate-limits edits to the same reply, and nobody reads progress faster than this anyway.
+    private static readonly TimeSpan ProgressInterval = TimeSpan.FromSeconds(3);
     private const int DefaultListCount = 20;
     private const int MaximumListCount = 50;
     private const int MaximumMemoryLength = 90;
@@ -128,10 +130,10 @@ public class MemoryModule(
     [SubSlashCommand("backfill", "Examines older messages across this server for memories")]
     public async Task Backfill(
         [SlashCommandParameter(
-            Description = "Messages to walk backward through per channel (1-100)",
+            Description = "How many days back to go, continuing from earlier backfills",
             MinValue = 1,
-            MaxValue = MaximumMessageCount)]
-        int messages = DefaultMessageCount)
+            MaxValue = MaximumDays)]
+        int days = DefaultDays)
     {
         await Context.Interaction.SendResponseAsync(
             InteractionCallback.DeferredMessage(MessageFlags.Ephemeral));
@@ -145,10 +147,27 @@ public class MemoryModule(
             }
             else
             {
+                var progress = new ThrottledProgress<DiscordMemoryBackfillProgress>(
+                    ProgressInterval,
+                    async update =>
+                    {
+                        try
+                        {
+                            await Context.Interaction.ModifyResponseAsync(message => message.Content =
+                                $"Backfilling the last {days} days… {update.FinishedChannels}/{update.Channels} channels done, " +
+                                $"{update.Fetched} messages walked, {update.Stored} stored.");
+                        }
+                        catch (Exception ex)
+                        {
+                            logger.LogDebug(ex, "Could not show memory backfill progress.");
+                        }
+                    });
                 var result = await memoryBackfill.BackfillGuildAsync(
                     guildId,
-                    Math.Clamp(messages, 1, MaximumMessageCount));
-                response = FormatResult(result);
+                    DateTimeOffset.UtcNow.AddDays(-days),
+                    progress);
+                await progress.WhenIdle();
+                response = FormatResult(result, days);
             }
         }
         catch (Exception ex)
@@ -160,7 +179,7 @@ public class MemoryModule(
         await Context.Interaction.ModifyResponseAsync(message => message.Content = response);
     }
 
-    private static string FormatResult(DiscordMemoryGuildBackfillResult result)
+    private static string FormatResult(DiscordMemoryGuildBackfillResult result, int days)
     {
         if (result.IsDisabled)
         {
@@ -173,11 +192,11 @@ public class MemoryModule(
         }
 
         var status = result.CompleteChannels == result.Channels
-            ? "Backfill is complete for every readable channel."
-            : "Run the command again to continue farther back in the remaining channels.";
+            ? "Every readable channel is backfilled to its first message."
+            : $"Channels are covered back {days} days; use more days to go farther.";
         if (result.FailedChannels > 0)
         {
-            status += $" {result.FailedChannels} channel(s) failed and will be retried.";
+            status += $" {result.FailedChannels} channel(s) failed; run it again to retry them.";
         }
 
         return $"Visited {result.Channels} channels ({result.CompleteChannels} complete). " +
@@ -186,4 +205,34 @@ public class MemoryModule(
                $"ignored {result.Ignored}. {status}";
     }
 
+    /// <summary>Passes on the latest value at most once per interval, and never while a report is still running.</summary>
+    private sealed class ThrottledProgress<T>(TimeSpan interval, Func<T, Task> report) : IProgress<T>
+    {
+        private readonly Lock _gate = new();
+        private Task _running = Task.CompletedTask;
+        private DateTimeOffset _lastReport = DateTimeOffset.MinValue;
+
+        public void Report(T value)
+        {
+            lock (_gate)
+            {
+                var now = DateTimeOffset.UtcNow;
+                if (!_running.IsCompleted || now - _lastReport < interval)
+                {
+                    return;
+                }
+
+                _lastReport = now;
+                _running = report(value);
+            }
+        }
+
+        public Task WhenIdle()
+        {
+            lock (_gate)
+            {
+                return _running;
+            }
+        }
+    }
 }
