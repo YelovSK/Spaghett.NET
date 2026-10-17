@@ -1,4 +1,4 @@
-namespace SpaghettNET.Bot.Services;
+namespace SpaghettNET.Bot.Services.Chat;
 
 public sealed class OpenAIChatRuntimeSettings(OpenAIOptions options)
 {

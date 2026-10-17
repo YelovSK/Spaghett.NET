@@ -1,6 +1,6 @@
 using DiscordMemory = SpaghettNET.Persistence.Models.DiscordMemory;
 
-namespace SpaghettNET.Bot.Services;
+namespace SpaghettNET.Bot.Services.Memory;
 
 internal static class DiscordMemoryShared
 {

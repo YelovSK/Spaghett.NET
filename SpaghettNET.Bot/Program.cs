@@ -13,6 +13,9 @@ using NetCord.Gateway;
 using NetCord.Hosting.Gateway;
 using NetCord.Hosting.Services;
 using NetCord.Hosting.Services.ApplicationCommands;
+using SpaghettNET.Bot.Services.Chat;
+using SpaghettNET.Bot.Services.Memory;
+using SpaghettNET.Bot.Services.OpenRouter;
 
 var builder = Host.CreateApplicationBuilder(new HostApplicationBuilderSettings
 {

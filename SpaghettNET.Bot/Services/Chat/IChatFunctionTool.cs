@@ -1,7 +1,7 @@
 using System.Text.Json;
 using NetCord.Gateway;
 
-namespace SpaghettNET.Bot.Services;
+namespace SpaghettNET.Bot.Services.Chat;
 
 public interface IChatFunctionTool
 {

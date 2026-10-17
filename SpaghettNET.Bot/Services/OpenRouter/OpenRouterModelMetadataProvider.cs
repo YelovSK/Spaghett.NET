@@ -6,7 +6,7 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using Microsoft.Extensions.Logging;
 
-namespace SpaghettNET.Bot.Services;
+namespace SpaghettNET.Bot.Services.OpenRouter;
 
 public sealed class OpenRouterModelMetadataProvider(
     HttpClient httpClient,

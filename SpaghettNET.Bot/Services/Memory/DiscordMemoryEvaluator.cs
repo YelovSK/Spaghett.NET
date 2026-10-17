@@ -4,11 +4,11 @@ using NetCord;
 using NetCord.Gateway;
 using NetCord.Rest;
 using SpaghettNET.Persistence;
-using static SpaghettNET.Bot.Services.DiscordMemoryShared;
+using static SpaghettNET.Bot.Services.Memory.DiscordMemoryShared;
 using DiscordMemoryEvaluation = SpaghettNET.Persistence.Models.DiscordMemoryEvaluation;
 using DiscordMemory = SpaghettNET.Persistence.Models.DiscordMemory;
 
-namespace SpaghettNET.Bot.Services;
+namespace SpaghettNET.Bot.Services.Memory;
 
 public sealed class DiscordMemoryEvaluator(
     IDbContextFactory<BotContext> dbContextFactory,

@@ -3,6 +3,7 @@ using NetCord;
 using NetCord.Gateway;
 using SpaghettNET.Bot.Services.Scripting;
 using SpaghettNET.Persistence.Models;
+using SpaghettNET.Bot.Services.Chat;
 
 namespace SpaghettNET.Bot.Services.ChatTools;
 

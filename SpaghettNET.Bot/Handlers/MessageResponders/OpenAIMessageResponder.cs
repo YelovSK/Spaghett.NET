@@ -1,5 +1,5 @@
-using SpaghettNET.Bot.Services;
 using NetCord.Gateway;
+using SpaghettNET.Bot.Services.Chat;
 
 namespace SpaghettNET.Bot.Handlers.MessageResponders;
 

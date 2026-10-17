@@ -1,6 +1,6 @@
 using NetCord.Rest;
 
-namespace SpaghettNET.Bot.Services;
+namespace SpaghettNET.Bot.Services.Memory;
 
 /// <summary>
 /// Consecutive messages from one author in one channel. People often split one thought across

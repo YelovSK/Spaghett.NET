@@ -1,7 +1,7 @@
 using Microsoft.Extensions.Logging;
 using NetCord.Gateway;
 
-namespace SpaghettNET.Bot.Services;
+namespace SpaghettNET.Bot.Services.Memory;
 
 /// <summary>
 /// Holds each channel's latest run open until someone else speaks or the author goes quiet, then

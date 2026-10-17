@@ -2,10 +2,11 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 using NetCord.Gateway;
 using SpaghettNET.Persistence;
-using static SpaghettNET.Bot.Services.DiscordMemoryShared;
+using SpaghettNET.Bot.Services.Chat;
+using static SpaghettNET.Bot.Services.Memory.DiscordMemoryShared;
 using DiscordMemory = SpaghettNET.Persistence.Models.DiscordMemory;
 
-namespace SpaghettNET.Bot.Services;
+namespace SpaghettNET.Bot.Services.Memory;
 
 public sealed class DiscordMemoryRecall(
     IDbContextFactory<BotContext> dbContextFactory,

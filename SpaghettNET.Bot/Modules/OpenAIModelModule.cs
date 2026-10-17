@@ -1,6 +1,7 @@
 using System.Globalization;
-using SpaghettNET.Bot.Services;
 using NetCord.Services.ApplicationCommands;
+using SpaghettNET.Bot.Services.Chat;
+using SpaghettNET.Bot.Services.OpenRouter;
 
 namespace SpaghettNET.Bot.Modules;
 

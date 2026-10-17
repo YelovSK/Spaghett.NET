@@ -1,4 +1,4 @@
-namespace SpaghettNET.Bot.Services;
+namespace SpaghettNET.Bot.Services.Memory;
 
 internal static class MemoryRetentionPolicy
 {

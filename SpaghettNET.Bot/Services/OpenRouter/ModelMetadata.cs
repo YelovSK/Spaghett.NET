@@ -1,6 +1,6 @@
 using Microsoft.Extensions.Logging;
 
-namespace SpaghettNET.Bot.Services;
+namespace SpaghettNET.Bot.Services.OpenRouter;
 
 public enum ModelCapability
 {

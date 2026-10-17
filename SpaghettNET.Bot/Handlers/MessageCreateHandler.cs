@@ -6,6 +6,7 @@ using Microsoft.EntityFrameworkCore;
 using NetCord.Gateway;
 using NetCord.Hosting.Gateway;
 using NetCord.Rest;
+using SpaghettNET.Bot.Services.Memory;
 
 namespace SpaghettNET.Bot.Handlers;
 

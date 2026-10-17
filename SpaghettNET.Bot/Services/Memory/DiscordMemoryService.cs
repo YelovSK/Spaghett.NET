@@ -1,10 +1,11 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 using SpaghettNET.Persistence;
+using SpaghettNET.Bot.Services.Chat;
 using DiscordMemory = SpaghettNET.Persistence.Models.DiscordMemory;
 using DiscordMemoryExcludedChannel = SpaghettNET.Persistence.Models.DiscordMemoryExcludedChannel;
 
-namespace SpaghettNET.Bot.Services;
+namespace SpaghettNET.Bot.Services.Memory;
 
 public sealed class DiscordMemoryService(
     IDbContextFactory<BotContext> dbContextFactory,

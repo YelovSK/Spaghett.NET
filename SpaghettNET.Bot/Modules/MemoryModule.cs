@@ -2,7 +2,7 @@ using Microsoft.Extensions.Logging;
 using NetCord;
 using NetCord.Rest;
 using NetCord.Services.ApplicationCommands;
-using SpaghettNET.Bot.Services;
+using SpaghettNET.Bot.Services.Memory;
 
 namespace SpaghettNET.Bot.Modules;
 

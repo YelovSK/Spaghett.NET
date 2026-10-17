@@ -5,8 +5,10 @@ using Microsoft.Extensions.Logging;
 using NetCord;
 using NetCord.Gateway;
 using NetCord.Rest;
+using SpaghettNET.Bot.Services.Memory;
+using SpaghettNET.Bot.Services.OpenRouter;
 
-namespace SpaghettNET.Bot.Services;
+namespace SpaghettNET.Bot.Services.Chat;
 
 public partial class OpenAIReplyGenerator(
     GatewayClient gatewayClient,

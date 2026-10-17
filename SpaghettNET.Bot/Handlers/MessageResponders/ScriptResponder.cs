@@ -4,6 +4,7 @@ using NetCord.Gateway;
 using NetCord.Rest;
 using SpaghettNET.Bot.Services;
 using SpaghettNET.Bot.Services.Scripting;
+using SpaghettNET.Bot.Services.Chat;
 
 namespace SpaghettNET.Bot.Handlers.MessageResponders;
 

@@ -2,6 +2,7 @@ using System.Text.Json;
 using NetCord;
 using NetCord.Gateway;
 using NetCord.Rest;
+using SpaghettNET.Bot.Services.Chat;
 
 namespace SpaghettNET.Bot.Services.ChatTools;
 

@@ -4,7 +4,7 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using Microsoft.Extensions.Logging;
 
-namespace SpaghettNET.Bot.Services;
+namespace SpaghettNET.Bot.Services.Chat;
 
 public sealed class OpenAIChatClient(
     HttpClient httpClient,

@@ -6,7 +6,7 @@ using NetCord.Rest;
 using SpaghettNET.Persistence;
 using DiscordMemoryBackfillCursor = SpaghettNET.Persistence.Models.DiscordMemoryBackfillCursor;
 
-namespace SpaghettNET.Bot.Services;
+namespace SpaghettNET.Bot.Services.Memory;
 
 public sealed class DiscordMemoryBackfill(
     IDbContextFactory<BotContext> dbContextFactory,
