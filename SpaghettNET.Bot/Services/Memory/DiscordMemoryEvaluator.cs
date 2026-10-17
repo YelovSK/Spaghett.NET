@@ -82,38 +82,15 @@ public sealed class DiscordMemoryEvaluator(
             return new MemoryEvaluationOutcome(AlreadyEvaluated: alreadyEvaluated);
         }
 
-        var keyedRuns = pending
-            .Select((run, index) => new { Key = $"m{index}", Run = run })
-            .ToArray();
-        var state = new
-        {
-            messages = keyedRuns.ToDictionary(
-                item => item.Key,
-                item => new
-                {
-                    content = item.Run.Content,
-                }),
-        };
-        var questions = keyedRuns
-            .SelectMany(item => MemoryRetentionPolicy.Questions(item.Key, $"messages.{item.Key}.content"))
-            .ToDictionary(item => item.Key, item => item.Value);
-        var answers = await decisionClient.EvaluateAsync(state, questions, sessionId, cancellationToken);
-        if (answers is null)
+        // Judged one request per run: sharing a request with neighbouring messages inflates the scores,
+        // since a reply reads as more meaningful next to the conversation it belongs to.
+        var verdicts = await Task.WhenAll(pending.Select(run => DecideAsync(run, sessionId, cancellationToken)));
+        if (verdicts.Any(verdict => verdict is null))
         {
             return null;
         }
 
-        var decisions = new List<(MessageRun Run, bool ShouldStore)>(keyedRuns.Length);
-        foreach (var item in keyedRuns)
-        {
-            if (!MemoryRetentionPolicy.TryDecide(answers, item.Key, out var shouldStore))
-            {
-                logger.LogWarning("Memory evaluation returned an incomplete or invalid answer set.");
-                return null;
-            }
-
-            decisions.Add((item.Run, shouldStore));
-        }
+        var decisions = pending.Zip(verdicts, (run, verdict) => (Run: run, ShouldStore: verdict!.Value)).ToArray();
 
         // One write at a time, so dedup sees memories that concurrent passes just stored and two
         // passes cannot both delete the same memory.
@@ -225,6 +202,29 @@ public sealed class DiscordMemoryEvaluator(
         {
             _writeLock.Release();
         }
+    }
+
+    /// <summary>Returns <see langword="null"/> when the decision model could not be consulted.</summary>
+    private async Task<bool?> DecideAsync(MessageRun run, string sessionId, CancellationToken cancellationToken)
+    {
+        const string key = "message";
+        var answers = await decisionClient.EvaluateAsync(
+            new { message = run.Content },
+            MemoryRetentionPolicy.Questions(key, key),
+            sessionId,
+            cancellationToken);
+        if (answers is null)
+        {
+            return null;
+        }
+
+        if (!MemoryRetentionPolicy.TryDecide(answers, key, out var shouldStore))
+        {
+            logger.LogWarning("Memory evaluation returned an incomplete or invalid answer set.");
+            return null;
+        }
+
+        return shouldStore;
     }
 
     /// <summary>
