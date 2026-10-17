@@ -80,9 +80,7 @@ public class ScriptModule(
         int id) =>
         RespondAsync(async guildId =>
         {
-            // Discord only applies default permissions to the whole command, and list/show are for everyone.
-            if (Context.Interaction.User is not GuildInteractionUser { Permissions: var permissions } ||
-                !permissions.HasFlag(Permissions.ManageGuild))
+            if (!CanManageScripts)
             {
                 return new Reply("Deleting scripts needs the Manage Server permission.");
             }
@@ -92,8 +90,39 @@ public class ScriptModule(
                 : new Reply($"There is no script #{id}.");
         });
 
+    [SubSlashCommand("disable", "Stops a script from running without deleting it")]
+    public Task Disable(
+        [SlashCommandParameter(Description = "The script's number from /script list")]
+        int id) =>
+        SetEnabledAsync(id, false);
+
+    [SubSlashCommand("enable", "Lets a disabled script run again")]
+    public Task Enable(
+        [SlashCommandParameter(Description = "The script's number from /script list")]
+        int id) =>
+        SetEnabledAsync(id, true);
+
+    private Task SetEnabledAsync(int id, bool enabled) =>
+        RespondAsync(async guildId =>
+        {
+            if (!CanManageScripts)
+            {
+                return new Reply($"{(enabled ? "Enabling" : "Disabling")} scripts needs the Manage Server permission.");
+            }
+
+            return await scriptService.SetEnabledAsync(guildId, id, enabled)
+                ? new Reply($"{(enabled ? "Enabled" : "Disabled")} script #{id}.")
+                : new Reply($"There is no script #{id}.");
+        });
+
+    // Discord only applies default permissions to the whole command, and list/show are for everyone.
+    private bool CanManageScripts =>
+        Context.Interaction.User is GuildInteractionUser { Permissions: var permissions } &&
+        permissions.HasFlag(Permissions.ManageGuild);
+
     private static string Status(BotScript script) =>
-        script.FailureCount >= ScriptService.MaxFailures ? $" · ⛔ disabled after {script.FailureCount} failures"
+        script.IsDisabled ? " · ⏸️ disabled"
+        : script.FailureCount >= ScriptService.MaxFailures ? $" · ⛔ disabled after {script.FailureCount} failures"
         : script.FailureCount > 0 ? $" · ⚠️ failing ({script.FailureCount} in a row)"
         : "";
 

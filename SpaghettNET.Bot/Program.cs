@@ -42,6 +42,7 @@ builder.Services
     .AddSingleton<IChatFunctionTool, UpdateScriptTool>()
     .AddSingleton<IChatFunctionTool, ListScriptsTool>()
     .AddSingleton<IChatFunctionTool, DeleteScriptTool>()
+    .AddSingleton<IChatFunctionTool, SetScriptEnabledTool>()
     .AddSingleton<IChatFunctionTool, FindMemberTool>()
     .AddSingleton<IChatFunctionTool, ListMembersTool>()
     .AddSingleton<IChatFunctionTool, TimeoutMemberTool>()

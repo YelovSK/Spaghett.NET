@@ -189,9 +189,13 @@ public sealed class ListScriptsTool(ScriptService scriptService) : IChatFunction
             lines.Add($"Expires <t:{expiresAt.ToUnixTimeSeconds()}:R>");
         }
 
-        if (script.FailureCount >= ScriptService.MaxFailures)
+        if (script.IsDisabled)
         {
-            lines.Add($"DISABLED after {script.FailureCount} failures in a row. Fix it with update_script.");
+            lines.Add("DISABLED by hand. Turn it back on with set_script_enabled.");
+        }
+        else if (script.FailureCount >= ScriptService.MaxFailures)
+        {
+            lines.Add($"DISABLED after {script.FailureCount} failures in a row. Fix it with update_script, or turn it back on with set_script_enabled if the cause is gone.");
         }
 
         if (script.LastError is not null)
@@ -233,6 +237,44 @@ public sealed class DeleteScriptTool(ScriptService scriptService) : IChatFunctio
 
         return await scriptService.DeleteAsync(message.GuildId!.Value, id)
             ? $"Deleted script #{id}."
+            : $"There is no script #{id}.";
+    }
+}
+
+public sealed class SetScriptEnabledTool(ScriptService scriptService) : IChatFunctionTool
+{
+    public string Name => "set_script_enabled";
+
+    public string Description =>
+        "Turns a script off without deleting it, or back on. Turning it on also clears its failures, so it revives " +
+        "a script that stopped after failing too often. Only works when the person asking has the Manage Server permission.";
+
+    public object Parameters => new
+    {
+        type = "object",
+        properties = new
+        {
+            id = new { type = "integer" },
+            enabled = new { type = "boolean" },
+        },
+        required = new[] { "id", "enabled" },
+    };
+
+    public async Task<string> InvokeAsync(JsonElement arguments, Message message, CancellationToken cancellationToken)
+    {
+        if (ChatToolHelper.Deny(message, Permissions.ManageGuild, "Manage Server") is { } denial)
+        {
+            return denial;
+        }
+
+        if (ChatToolHelper.GetInt(arguments, "id") is not { } id ||
+            ChatToolHelper.GetBool(arguments, "enabled") is not { } enabled)
+        {
+            return "id and enabled are required.";
+        }
+
+        return await scriptService.SetEnabledAsync(message.GuildId!.Value, id, enabled)
+            ? $"{(enabled ? "Enabled" : "Disabled")} script #{id}."
             : $"There is no script #{id}.";
     }
 }

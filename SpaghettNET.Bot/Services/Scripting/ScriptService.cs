@@ -26,7 +26,10 @@ public sealed class ScriptService(
             foreach (var loaded in await GetLoadedAsync())
             {
                 var script = loaded.Script;
-                if (script.GuildId != context.Guild.Id || IsExpired(script) || script.FailureCount >= MaxFailures)
+                if (script.GuildId != context.Guild.Id ||
+                    IsExpired(script) ||
+                    script.IsDisabled ||
+                    script.FailureCount >= MaxFailures)
                 {
                     continue;
                 }
@@ -93,6 +96,14 @@ public sealed class ScriptService(
                 .SetProperty(script => script.Description, script => description ?? script.Description)
                 .SetProperty(script => script.FailureCount, 0)
                 .SetProperty(script => script.LastError, (string?)null))) > 0;
+
+    /// <summary>Enabling also gives the script a fresh set of failures, so it can recover from being stopped by them.</summary>
+    public async Task<bool> SetEnabledAsync(ulong guildId, int scriptId, bool enabled) =>
+        await WriteAsync(dbContext => dbContext.BotScripts
+            .Where(script => script.GuildId == guildId && script.Id == scriptId)
+            .ExecuteUpdateAsync(setters => setters
+                .SetProperty(script => script.IsDisabled, !enabled)
+                .SetProperty(script => script.FailureCount, script => enabled ? 0 : script.FailureCount))) > 0;
 
     public async Task<bool> DeleteAsync(ulong guildId, int scriptId) =>
         await WriteAsync(dbContext => dbContext.BotScripts

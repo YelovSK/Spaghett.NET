@@ -117,4 +117,9 @@ internal static partial class ChatToolHelper
 
     public static int? GetInt(JsonElement arguments, string name) =>
         GetDouble(arguments, name) is { } number ? (int)Math.Clamp(number, int.MinValue, int.MaxValue) : null;
+
+    public static bool? GetBool(JsonElement arguments, string name) =>
+        arguments.TryGetProperty(name, out var value) && value.ValueKind is JsonValueKind.True or JsonValueKind.False
+            ? value.GetBoolean()
+            : null;
 }

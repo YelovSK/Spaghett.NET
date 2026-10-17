@@ -13,6 +13,8 @@ public sealed class BotScript
     public required ulong CreatedById { get; set; }
     public required DateTimeOffset CreatedAt { get; set; }
     public DateTimeOffset? ExpiresAt { get; set; }
+    /// <summary>Turned off by hand, as opposed to stopped by <see cref="FailureCount"/>.</summary>
+    public bool IsDisabled { get; set; }
 
     /// <summary>Consecutive failed runs. The script stops running once this hits the limit.</summary>
     public int FailureCount { get; set; }

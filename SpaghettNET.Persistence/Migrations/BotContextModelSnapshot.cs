@@ -46,6 +46,9 @@ namespace SpaghettNET.Persistence.Migrations
                     b.Property<long>("GuildId")
                         .HasColumnType("INTEGER");
 
+                    b.Property<bool>("IsDisabled")
+                        .HasColumnType("INTEGER");
+
                     b.Property<string>("LastError")
                         .HasColumnType("TEXT");
 
