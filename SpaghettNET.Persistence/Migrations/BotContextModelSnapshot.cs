@@ -117,18 +117,21 @@ namespace SpaghettNET.Persistence.Migrations
                     b.Property<DateTimeOffset>("CreatedAt")
                         .HasColumnType("TEXT");
 
+                    b.Property<long>("FirstMessageId")
+                        .HasColumnType("INTEGER");
+
                     b.Property<long>("GuildId")
                         .HasColumnType("INTEGER");
 
-                    b.Property<long>("MessageId")
+                    b.Property<long>("LastMessageId")
                         .HasColumnType("INTEGER");
 
                     b.HasKey("Id");
 
-                    b.HasIndex("MessageId")
+                    b.HasIndex("FirstMessageId")
                         .IsUnique();
 
-                    b.HasIndex("GuildId", "MessageId");
+                    b.HasIndex("GuildId", "LastMessageId");
 
                     b.ToTable("DiscordMemories");
                 });

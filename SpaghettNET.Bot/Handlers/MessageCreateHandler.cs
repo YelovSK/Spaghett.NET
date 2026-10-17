@@ -3,7 +3,6 @@ using SpaghettNET.Bot.Handlers.MessageResponders;
 using SpaghettNET.Bot.Services;
 using SpaghettNET.Persistence;
 using Microsoft.EntityFrameworkCore;
-using Microsoft.Extensions.Logging;
 using NetCord.Gateway;
 using NetCord.Hosting.Gateway;
 using NetCord.Rest;
@@ -13,9 +12,8 @@ namespace SpaghettNET.Bot.Handlers;
 public class MessageCreateHandler(
     IDbContextFactory<BotContext> dbContextFactory,
     GatewayClient gatewayClient,
-    DiscordMemoryService memoryService,
+    DiscordMemoryRunBuffer memoryRunBuffer,
     DiscordMessageSender messageSender,
-    ILogger<MessageCreateHandler> logger,
     IEnumerable<IMessageCreateResponder> responders) : IMessageCreateGatewayHandler
 {
     private static readonly TimeSpan TypingRefreshInterval = TimeSpan.FromSeconds(8);
@@ -23,6 +21,7 @@ public class MessageCreateHandler(
     public async ValueTask HandleAsync(Message message)
     {
         await IncrementMessageCountAsync(message.Author);
+        memoryRunBuffer.Observe(message);
 
         // Ignore this bot's messages
         if (message.Author.Id == gatewayClient.Id)
@@ -30,49 +29,34 @@ public class MessageCreateHandler(
             return;
         }
 
-        var memoryTask = memoryService.ObserveAsync(message);
-        try
+        foreach (var responder in responders)
         {
-            foreach (var responder in responders)
+            if (!await responder.ShouldRespondAsync(message))
             {
-                if (!await responder.ShouldRespondAsync(message))
-                {
-                    continue;
-                }
+                continue;
+            }
 
-                MessageCreateResponse? response = null;
-                await RunWithTypingIndicatorAsync(
-                    message.ChannelId,
-                    async () =>
+            MessageCreateResponse? response = null;
+            await RunWithTypingIndicatorAsync(
+                message.ChannelId,
+                async () =>
+                {
+                    response = await responder.GetResponseAsync(message);
+
+                    if (response?.Content is { } content)
                     {
-                        response = await responder.GetResponseAsync(message);
+                        await SendResponseAsync(message, response.ResponseType, content);
+                    }
+                });
 
-                        if (response?.Content is { } content)
-                        {
-                            await SendResponseAsync(message, response.ResponseType, content);
-                        }
-                    });
-
-                if (response is null)
-                {
-                    continue;
-                }
-
-                if (response.StopProcessing)
-                {
-                    return;
-                }
-            }
-        }
-        finally
-        {
-            try
+            if (response is null)
             {
-                await memoryTask;
+                continue;
             }
-            catch (Exception ex)
+
+            if (response.StopProcessing)
             {
-                logger.LogWarning(ex, "Discord memory observation failed.");
+                return;
             }
         }
     }

@@ -24,10 +24,10 @@ public class BotContext : DbContext
         base.OnModelCreating(modelBuilder);
 
         modelBuilder.Entity<DiscordMemory>()
-            .HasIndex(memory => memory.MessageId)
+            .HasIndex(memory => memory.FirstMessageId)
             .IsUnique();
         modelBuilder.Entity<DiscordMemory>()
-            .HasIndex(memory => new { memory.GuildId, memory.MessageId });
+            .HasIndex(memory => new { memory.GuildId, memory.LastMessageId });
 
         // Every ulong here is a Discord snowflake, which fits in a signed 64-bit integer.
         // SQLite refuses to sort or compare ulong, so store them as long instead.

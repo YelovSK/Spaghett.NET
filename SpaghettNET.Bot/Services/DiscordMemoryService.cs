@@ -36,88 +36,80 @@ public sealed class DiscordMemoryService(
         Uri.TryCreate(options.BaseUrl, UriKind.Absolute, out var uri) &&
         uri.Host.EndsWith("openrouter.ai", StringComparison.OrdinalIgnoreCase);
 
-    public async Task<DiscordMemoryObservationResult> ObserveAsync(
-        Message message,
+    internal async Task EvaluateRunAsync(
+        ulong guildId,
+        MessageRun run,
         CancellationToken cancellationToken = default)
     {
-        if (!IsEnabled)
-        {
-            return DiscordMemoryObservationResult.Disabled;
-        }
-
-        if (message.GuildId is not { } guildId)
-        {
-            return DiscordMemoryObservationResult.Ignored;
-        }
-
         var outcome = await EvaluateAsync(
-            [message],
+            [run],
             guildId,
-            message.ChannelId,
+            run.First.ChannelId,
             $"discord-memory-store:{guildId}",
             cancellationToken);
-
-        return outcome switch
+        if (outcome is null)
         {
-            null => DiscordMemoryObservationResult.Failed,
-            { Ignored: > 0 } => DiscordMemoryObservationResult.Ignored,
-            { AlreadyEvaluated: > 0 } => DiscordMemoryObservationResult.AlreadyEvaluated,
-            { Retained: > 0 } => DiscordMemoryObservationResult.Stored,
-            _ => DiscordMemoryObservationResult.Rejected,
-        };
+            logger.LogWarning(
+                "Memory evaluation failed because Jev could not be consulted. GuildId: {GuildId}, ChannelId: {ChannelId}, FirstMessageId: {FirstMessageId}",
+                guildId,
+                run.First.ChannelId,
+                run.First.Id);
+        }
     }
 
     /// <summary>
-    /// Asks Jev which of <paramref name="messages"/> are worth remembering and applies the verdict.
+    /// Asks Jev which of <paramref name="runs"/> are worth remembering and applies the verdict.
     /// Returns <see langword="null"/> when Jev could not be consulted, leaving the batch unevaluated.
     /// </summary>
     private async Task<MemoryEvaluationOutcome?> EvaluateAsync(
-        IReadOnlyList<RestMessage> messages,
+        IReadOnlyList<MessageRun> runs,
         ulong guildId,
         ulong channelId,
         string sessionId,
         CancellationToken cancellationToken)
     {
-        var candidates = messages.Where(IsMemoryCandidate).ToArray();
-        var ignored = messages.Count - candidates.Length;
-        if (candidates.Length == 0)
+        if (runs.Count == 0)
         {
-            return new MemoryEvaluationOutcome(Ignored: ignored);
+            return new MemoryEvaluationOutcome();
         }
 
+        var messageCount = runs.Sum(run => run.Messages.Count);
         await using var dbContext = await dbContextFactory.CreateDbContextAsync(cancellationToken);
         if (await IsChannelExcludedAsync(dbContext, guildId, channelId, cancellationToken))
         {
-            return new MemoryEvaluationOutcome(Ignored: messages.Count);
+            return new MemoryEvaluationOutcome(Ignored: messageCount);
         }
 
-        var candidateIds = candidates.Select(message => message.Id).ToArray();
+        var messageIds = runs.SelectMany(run => run.Messages).Select(message => message.Id).ToArray();
         var evaluations = await dbContext.DiscordMemoryEvaluations
-            .Where(evaluation => candidateIds.Contains(evaluation.Id))
+            .Where(evaluation => messageIds.Contains(evaluation.Id))
             .ToDictionaryAsync(evaluation => evaluation.Id, cancellationToken);
 
-        var pending = candidates
-            .Where(message => evaluations.GetValueOrDefault(message.Id)?.EvaluationVersion != EvaluationVersion)
+        // A run that was grouped differently before is judged again as a whole.
+        var pending = runs
+            .Where(run => run.Messages.Any(message =>
+                evaluations.GetValueOrDefault(message.Id)?.EvaluationVersion != EvaluationVersion))
             .ToArray();
-        var alreadyEvaluated = candidates.Length - pending.Length;
+        var pendingMessageCount = pending.Sum(run => run.Messages.Count);
+        var alreadyEvaluated = messageCount - pendingMessageCount;
         if (pending.Length == 0)
         {
-            return new MemoryEvaluationOutcome(AlreadyEvaluated: alreadyEvaluated, Ignored: ignored);
+            return new MemoryEvaluationOutcome(AlreadyEvaluated: alreadyEvaluated);
         }
 
-        var keyedMessages = pending
-            .Select((message, index) => new { Key = $"m{index}", Message = message })
+        var keyedRuns = pending
+            .Select((run, index) => new { Key = $"m{index}", Run = run })
             .ToArray();
         var state = new
         {
-            messages = keyedMessages.ToDictionary(
+            messages = keyedRuns.ToDictionary(
                 item => item.Key,
                 item => new
                 {
-                    content = item.Message.Content.Trim(),
+                    content = item.Run.Content,
                 }),
         };
-        var questions = keyedMessages
+        var questions = keyedRuns
             .SelectMany(item => MemoryRetentionPolicy.Questions(item.Key, $"messages.{item.Key}.content"))
             .ToDictionary(item => item.Key, item => item.Value);
         var answers = await jevClient.EvaluateAsync(state, questions, sessionId, cancellationToken);
@@ -126,8 +118,8 @@ public sealed class DiscordMemoryService(
             return null;
         }
 
-        var decisions = new List<(RestMessage Message, bool ShouldStore)>(keyedMessages.Length);
-        foreach (var item in keyedMessages)
+        var decisions = new List<(MessageRun Run, bool ShouldStore)>(keyedRuns.Length);
+        foreach (var item in keyedRuns)
         {
             if (!MemoryRetentionPolicy.TryDecide(answers, item.Key, out var shouldStore))
             {
@@ -135,39 +127,45 @@ public sealed class DiscordMemoryService(
                 return null;
             }
 
-            decisions.Add((item.Message, shouldStore));
+            decisions.Add((item.Run, shouldStore));
         }
 
-        var memories = await dbContext.DiscordMemories
-            .Where(memory => candidateIds.Contains(memory.MessageId))
-            .ToDictionaryAsync(memory => memory.MessageId, cancellationToken);
+        var oldestId = pending.Min(run => run.First.Id);
+        var newestId = pending.Max(run => run.Last.Id);
+        var overlapping = await dbContext.DiscordMemories
+            .Where(memory => memory.ChannelId == channelId &&
+                             memory.FirstMessageId <= newestId &&
+                             memory.LastMessageId >= oldestId)
+            .ToListAsync(cancellationToken);
         string? channelName = null;
         var stored = 0;
-        var retained = 0;
 
-        foreach (var (message, shouldStore) in decisions)
+        foreach (var (run, shouldStore) in decisions)
         {
-            UpsertEvaluation(
-                dbContext,
-                evaluations.GetValueOrDefault(message.Id),
-                message,
-                guildId,
-                channelId,
-                shouldStore);
-
-            var existingMemory = memories.GetValueOrDefault(message.Id);
-            if (!shouldStore)
+            foreach (var message in run.Messages)
             {
-                if (existingMemory is not null)
-                {
-                    dbContext.DiscordMemories.Remove(existingMemory);
-                }
+                UpsertEvaluation(
+                    dbContext,
+                    evaluations.GetValueOrDefault(message.Id),
+                    message.Id,
+                    guildId,
+                    channelId,
+                    shouldStore);
+            }
 
+            var existingMemories = overlapping
+                .Where(memory => memory.FirstMessageId <= run.Last.Id && memory.LastMessageId >= run.First.Id)
+                .ToArray();
+            if (shouldStore &&
+                existingMemories is [var same] &&
+                same.FirstMessageId == run.First.Id &&
+                same.LastMessageId == run.Last.Id)
+            {
                 continue;
             }
 
-            retained++;
-            if (existingMemory is not null)
+            dbContext.DiscordMemories.RemoveRange(existingMemories);
+            if (!shouldStore)
             {
                 continue;
             }
@@ -180,18 +178,20 @@ public sealed class DiscordMemoryService(
                 GuildId = guildId,
                 ChannelId = channelId,
                 ChannelName = channelName,
-                MessageId = message.Id,
-                AuthorId = message.Author.Id,
-                AuthorName = GetAuthorName(message.Author),
-                Content = message.Content.Trim(),
-                CreatedAt = message.CreatedAt,
+                FirstMessageId = run.First.Id,
+                LastMessageId = run.Last.Id,
+                AuthorId = run.First.Author.Id,
+                AuthorName = GetAuthorName(run.First.Author),
+                Content = run.Content,
+                CreatedAt = run.First.CreatedAt,
             });
             logger.LogInformation(
-                "Stored Discord memory. GuildId: {GuildId}, ChannelId: {ChannelId}, MessageId: {MessageId}, AuthorId: {AuthorId}",
+                "Stored Discord memory. GuildId: {GuildId}, ChannelId: {ChannelId}, FirstMessageId: {FirstMessageId}, Messages: {MessageCount}, AuthorId: {AuthorId}",
                 guildId,
                 channelId,
-                message.Id,
-                message.Author.Id);
+                run.First.Id,
+                run.Messages.Count,
+                run.First.Author.Id);
         }
 
         try
@@ -200,26 +200,24 @@ public sealed class DiscordMemoryService(
         }
         catch (DbUpdateException ex)
         {
-            // A concurrent observation or backfill pass can reach the same messages first.
-            var pendingIds = pending.Select(message => message.Id).ToArray();
+            // A live run and a backfill pass can reach the same messages first.
+            var pendingIds = pending.SelectMany(run => run.Messages).Select(message => message.Id).ToArray();
             if (await CountEvaluatedAsync(pendingIds, cancellationToken) < pendingIds.Length)
             {
                 throw;
             }
 
             logger.LogDebug(ex, "Memory evaluation raced a concurrent pass over the same messages.");
-            return new MemoryEvaluationOutcome(
-                AlreadyEvaluated: alreadyEvaluated + pendingIds.Length,
-                Ignored: ignored);
+            return new MemoryEvaluationOutcome(AlreadyEvaluated: messageCount);
         }
 
-        return new MemoryEvaluationOutcome(decisions.Count, stored, retained, alreadyEvaluated, ignored);
+        return new MemoryEvaluationOutcome(pendingMessageCount, stored, alreadyEvaluated);
     }
 
     private static void UpsertEvaluation(
         BotContext dbContext,
         DiscordMemoryEvaluation? existing,
-        RestMessage message,
+        ulong messageId,
         ulong guildId,
         ulong channelId,
         bool wasStored)
@@ -228,7 +226,7 @@ public sealed class DiscordMemoryService(
         {
             dbContext.DiscordMemoryEvaluations.Add(new DiscordMemoryEvaluation
             {
-                Id = message.Id,
+                Id = messageId,
                 GuildId = guildId,
                 ChannelId = channelId,
                 EvaluationVersion = EvaluationVersion,
@@ -244,11 +242,6 @@ public sealed class DiscordMemoryService(
         existing.WasStored = wasStored;
         existing.EvaluatedAt = DateTimeOffset.UtcNow;
     }
-
-    private static bool IsMemoryCandidate(RestMessage message) =>
-        !message.Author.IsBot &&
-        !message.WebhookId.HasValue &&
-        !string.IsNullOrWhiteSpace(message.Content);
 
     public async Task<DiscordMemoryGuildBackfillResult> BackfillGuildAsync(
         ulong guildId,
@@ -385,6 +378,21 @@ public sealed class DiscordMemoryService(
             }
         }
 
+        // Discord pages newest first, but runs are read oldest first.
+        var traversed = Enumerable.Reverse(fetchedMessages).ToList();
+        var runs = MessageRun.Group(traversed);
+        // The oldest run may continue past this page, so leave it for the next pass to see whole.
+        if (!exhausted && runs.Count > 1)
+        {
+            var heldBack = runs[0];
+            runs.RemoveAt(0);
+            traversed.RemoveAll(message => message.Id <= heldBack.Last.Id);
+        }
+
+        // A run that may still be growing belongs to the live buffer.
+        var liveCutoff = DateTimeOffset.UtcNow - MessageRun.MaxGap;
+        runs.RemoveAll(run => run.Last.CreatedAt > liveCutoff);
+
         var fetched = 0;
         var evaluated = 0;
         var stored = 0;
@@ -393,7 +401,7 @@ public sealed class DiscordMemoryService(
         var failed = false;
         ulong? oldestTraversedMessageId = null;
 
-        foreach (var batch in fetchedMessages.Chunk(BackfillBatchSize))
+        foreach (var batch in Enumerable.Reverse(runs).Chunk(BackfillBatchSize))
         {
             var result = await EvaluateAsync(
                 batch,
@@ -408,13 +416,25 @@ public sealed class DiscordMemoryService(
                 break;
             }
 
-            fetched += batch.Length;
+            var walked = CountWalked(batch[^1].First.Id);
+            fetched += walked;
             evaluated += result.Evaluated;
             stored += result.Stored;
             alreadyEvaluated += result.AlreadyEvaluated;
-            ignored += result.Ignored;
-            oldestTraversedMessageId = batch[^1].Id;
+            ignored += result.Ignored + walked - batch.Sum(run => run.Messages.Count);
+            oldestTraversedMessageId = batch[^1].First.Id;
         }
+
+        if (!failed && traversed.Count > 0)
+        {
+            var walked = CountWalked(traversed[0].Id);
+            fetched += walked;
+            ignored += walked;
+            oldestTraversedMessageId = traversed[0].Id;
+        }
+
+        int CountWalked(ulong oldestId) => traversed.Count(message =>
+            message.Id >= oldestId && message.Id < (oldestTraversedMessageId ?? ulong.MaxValue));
 
         if (oldestTraversedMessageId.HasValue || exhausted)
         {
@@ -475,7 +495,11 @@ public sealed class DiscordMemoryService(
         // The conversation includes Spaghett's own replies, which can be far longer than the
         // message being answered. Rank against that message so it is not drowned out.
         var latestMessage = sourceMessage.Content.Trim();
-        var pool = await GetRecallPoolAsync(guildId, contextMessageIds, cancellationToken);
+        var pool = await GetRecallPoolAsync(
+            guildId,
+            sourceMessage.ChannelId,
+            contextMessageIds,
+            cancellationToken);
         if (pool.Count == 0)
         {
             logger.LogDebug(
@@ -535,6 +559,7 @@ public sealed class DiscordMemoryService(
     /// <summary>The memories eligible for recall: the newest that fit the character budget.</summary>
     private async Task<IReadOnlyList<DiscordMemory>> GetRecallPoolAsync(
         ulong guildId,
+        ulong channelId,
         IReadOnlySet<ulong> contextMessageIds,
         CancellationToken cancellationToken)
     {
@@ -547,7 +572,7 @@ public sealed class DiscordMemoryService(
             .Where(memory => memory.GuildId == guildId &&
                              !excludedChannelIds.Contains(memory.ChannelId))
             // Snowflakes are ordered by creation time, and SQLite cannot sort a DateTimeOffset.
-            .OrderByDescending(memory => memory.MessageId)
+            .OrderByDescending(memory => memory.LastMessageId)
             .Take(MaxPoolSize + contextMessageIds.Count)
             .ToListAsync(cancellationToken);
 
@@ -555,7 +580,9 @@ public sealed class DiscordMemoryService(
         var characterCount = 0;
         foreach (var memory in newestMemories)
         {
-            if (contextMessageIds.Contains(memory.MessageId))
+            // Within a channel, every message between a run's first and last belongs to that run.
+            if (memory.ChannelId == channelId &&
+                contextMessageIds.Any(id => id >= memory.FirstMessageId && id <= memory.LastMessageId))
             {
                 continue;
             }
@@ -735,7 +762,7 @@ public sealed class DiscordMemoryService(
             .Where(memory => memory.GuildId == guildId &&
                              !excludedChannelIds.Contains(memory.ChannelId))
             // Snowflakes are ordered by creation time, and SQLite cannot sort a DateTimeOffset.
-            .OrderByDescending(memory => memory.MessageId)
+            .OrderByDescending(memory => memory.LastMessageId)
             .Take(count)
             .ToListAsync(cancellationToken);
     }
@@ -855,16 +882,6 @@ public sealed class DiscordMemoryService(
     private static string GetAuthorName(User user) => user.GlobalName ?? user.Username;
 }
 
-public enum DiscordMemoryObservationResult
-{
-    Disabled,
-    Ignored,
-    AlreadyEvaluated,
-    Rejected,
-    Stored,
-    Failed,
-}
-
 public sealed record DiscordMemoryBackfillResult(
     int Fetched = 0,
     int Evaluated = 0,
@@ -876,11 +893,9 @@ public sealed record DiscordMemoryBackfillResult(
     bool IsDisabled = false);
 
 /// <param name="Stored">Memories newly written to the database.</param>
-/// <param name="Retained">Messages judged worth remembering, including ones already stored.</param>
 internal sealed record MemoryEvaluationOutcome(
     int Evaluated = 0,
     int Stored = 0,
-    int Retained = 0,
     int AlreadyEvaluated = 0,
     int Ignored = 0);
 

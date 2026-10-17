@@ -31,6 +31,7 @@ builder.Services
     .AddSingleton<OpenAIChatRuntimeSettings>()
     .AddSingleton<ModelMetadataResolver>()
     .AddSingleton<DiscordMemoryService>()
+    .AddSingleton<DiscordMemoryRunBuffer>()
     .AddSingleton<OpenAIReplyGenerator>()
     .AddSingleton<DiscordMessageSender>()
     .AddSingleton<ScriptService>()
