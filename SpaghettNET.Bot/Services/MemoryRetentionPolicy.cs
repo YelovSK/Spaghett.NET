@@ -2,7 +2,7 @@ namespace SpaghettNET.Bot.Services;
 
 internal static class MemoryRetentionPolicy
 {
-    public const int Version = 4;
+    public const int Version = 5;
     public const double WorthRememberingThreshold = 0.6;
     public const double SensitiveThreshold = 0.2;
 
