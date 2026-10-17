@@ -1,3 +1,4 @@
+using System.Text;
 using Microsoft.Extensions.Logging;
 using NetCord;
 using NetCord.Rest;
@@ -65,6 +66,49 @@ public class MemoryModule(
 
             return $"{shown}:{Environment.NewLine}{string.Join(Environment.NewLine, lines)}";
         });
+
+    [SubSlashCommand("export", "Sends every memory as a text file")]
+    public async Task Export()
+    {
+        await Context.Interaction.SendResponseAsync(
+            InteractionCallback.DeferredMessage(MessageFlags.Ephemeral));
+
+        string content;
+        string? file = null;
+        try
+        {
+            if (Context.Interaction.GuildId is not { } guildId)
+            {
+                content = "This command only works in a server channel.";
+            }
+            else
+            {
+                var memories = await memoryService.GetLatestMemoriesAsync(guildId);
+                content = memories.Count == 0
+                    ? "Nothing has been remembered yet."
+                    : $"All {memories.Count} memories, newest first. Excluded channels are left out.";
+                file = memories.Count == 0
+                    ? null
+                    : string.Join("\n\n", memories.Select(memory =>
+                        $"[{memory.CreatedAt.ToUniversalTime():yyyy-MM-dd HH:mm} UTC] {memory.AuthorName} in {memory.ChannelName}\n" +
+                        memory.Content.ReplaceLineEndings("\n")));
+            }
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Memory export failed.");
+            content = "That failed.";
+        }
+
+        await Context.Interaction.ModifyResponseAsync(message =>
+        {
+            message.Content = content;
+            if (file is not null)
+            {
+                message.Attachments = [new AttachmentProperties("memories.txt", new MemoryStream(Encoding.UTF8.GetBytes(file)))];
+            }
+        });
+    }
 
     private static string Truncate(string value, int length)
     {
