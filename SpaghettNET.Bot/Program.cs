@@ -51,7 +51,7 @@ builder.Services
 
 builder.Services.AddHttpClient<OpenAIChatClient>(client =>
     client.Timeout = TimeSpan.FromSeconds(90));
-builder.Services.AddHttpClient<JevClient>(client =>
+builder.Services.AddHttpClient<DecisionClient>(client =>
     client.Timeout = TimeSpan.FromSeconds(10));
 builder.Services.AddHttpClient<OpenRouterManagementClient>();
 builder.Services.AddHttpClient<IModelMetadataProvider, OpenRouterModelMetadataProvider>();

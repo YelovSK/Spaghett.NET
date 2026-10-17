@@ -6,10 +6,10 @@ using Microsoft.Extensions.Logging;
 
 namespace SpaghettNET.Bot.Services;
 
-public sealed class JevClient(
+public sealed class DecisionClient(
     HttpClient httpClient,
     OpenAIOptions options,
-    ILogger<JevClient> logger)
+    ILogger<DecisionClient> logger)
 {
     private static readonly JsonSerializerOptions JsonSerializerOptions = new(JsonSerializerDefaults.Web)
     {
@@ -19,7 +19,7 @@ public sealed class JevClient(
     /// <summary>Asks yes/no questions, returning each answer's probability that the answer is yes.</summary>
     internal async Task<IReadOnlyDictionary<string, double>?> EvaluateAsync(
         object state,
-        IReadOnlyDictionary<string, JevNoulQuestion> questions,
+        IReadOnlyDictionary<string, NoulQuestion> questions,
         string sessionId,
         CancellationToken cancellationToken = default)
     {
@@ -34,7 +34,7 @@ public sealed class JevClient(
                 answer.Type != "noul" || answer.Noul is not { } value ||
                 !double.IsFinite(value) || value is < 0 or > 1))
         {
-            logger.LogWarning("Jev returned an incomplete or invalid noul answer set.");
+            logger.LogWarning("The decision model returned an incomplete or invalid noul answer set.");
             return null;
         }
 
@@ -46,9 +46,9 @@ public sealed class JevClient(
     /// question's options. Probabilities are normalised per question, so they rank options
     /// against each other rather than measuring them on an absolute scale.
     /// </summary>
-    internal async Task<IReadOnlyDictionary<string, JevChoiceResult>?> ChooseAsync(
+    internal async Task<IReadOnlyDictionary<string, ChoiceResult>?> ChooseAsync(
         object state,
-        IReadOnlyDictionary<string, JevChoiceQuestion> questions,
+        IReadOnlyDictionary<string, ChoiceQuestion> questions,
         string sessionId,
         CancellationToken cancellationToken = default)
     {
@@ -58,7 +58,7 @@ public sealed class JevClient(
             return null;
         }
 
-        var results = new Dictionary<string, JevChoiceResult>(questions.Count);
+        var results = new Dictionary<string, ChoiceResult>(questions.Count);
         foreach (var key in questions.Keys)
         {
             if (!answers.TryGetValue(key, out var answer) ||
@@ -67,17 +67,17 @@ public sealed class JevClient(
                 answer.Confidence is not { } confidence ||
                 !double.IsFinite(confidence))
             {
-                logger.LogWarning("Jev returned an incomplete or invalid choice answer set.");
+                logger.LogWarning("The decision model returned an incomplete or invalid choice answer set.");
                 return null;
             }
 
-            results[key] = new JevChoiceResult(confidence, probabilities);
+            results[key] = new ChoiceResult(confidence, probabilities);
         }
 
         return results;
     }
 
-    private async Task<IReadOnlyDictionary<string, JevAnswer>?> SendAsync(
+    private async Task<IReadOnlyDictionary<string, DecisionAnswer>?> SendAsync(
         object state,
         object questions,
         string sessionId,
@@ -92,7 +92,7 @@ public sealed class JevClient(
         using var request = new HttpRequestMessage(HttpMethod.Post, decisionsUri)
         {
             Content = JsonContent.Create(
-                new JevDecisionRequest(options.MemoryModel, state, questions, sessionId),
+                new DecisionRequest(options.MemoryModel, state, questions, sessionId),
                 options: JsonSerializerOptions),
         };
 
@@ -107,19 +107,19 @@ public sealed class JevClient(
             if (!response.IsSuccessStatusCode)
             {
                 logger.LogWarning(
-                    "Jev request failed with status code {StatusCode}.",
+                    "Decision request failed with status code {StatusCode}.",
                     response.StatusCode);
                 return null;
             }
 
-            var result = await response.Content.ReadFromJsonAsync<JevDecisionResponse>(
+            var result = await response.Content.ReadFromJsonAsync<DecisionResponse>(
                 JsonSerializerOptions,
                 cancellationToken);
             return result?.Answers;
         }
         catch (HttpRequestException ex)
         {
-            logger.LogWarning(ex, "Jev request failed.");
+            logger.LogWarning(ex, "Decision request failed.");
             return null;
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -128,7 +128,7 @@ public sealed class JevClient(
         }
         catch (TaskCanceledException ex)
         {
-            logger.LogWarning(ex, "Jev request timed out.");
+            logger.LogWarning(ex, "Decision request timed out.");
             return null;
         }
     }
@@ -147,23 +147,23 @@ public sealed class JevClient(
     }
 }
 
-internal sealed record JevDecisionRequest(
+internal sealed record DecisionRequest(
     [property: JsonPropertyName("model")] string Model,
     [property: JsonPropertyName("state")] object State,
     [property: JsonPropertyName("questions")] object Questions,
     [property: JsonPropertyName("session_id")] string SessionId);
 
-internal sealed record JevNoulQuestion(
+internal sealed record NoulQuestion(
     [property: JsonPropertyName("instructions")] string Instructions,
-    [property: JsonPropertyName("criteria")] JevNoulCriteria Criteria,
+    [property: JsonPropertyName("criteria")] NoulCriteria Criteria,
     [property: JsonPropertyName("type")] string Type = "noul");
 
-internal sealed record JevNoulCriteria(
+internal sealed record NoulCriteria(
     [property: JsonPropertyName("true")] string True,
     [property: JsonPropertyName("false")] string False);
 
-/// <summary>Jev accepts at most <see cref="MaxOptions"/> options per choice question.</summary>
-internal sealed record JevChoiceQuestion(
+/// <summary>The decisions API accepts at most <see cref="MaxOptions"/> options per choice question.</summary>
+internal sealed record ChoiceQuestion(
     [property: JsonPropertyName("instructions")] string Instructions,
     [property: JsonPropertyName("criteria")] IReadOnlyDictionary<string, string> Criteria,
     [property: JsonPropertyName("type")] string Type = "choice")
@@ -172,14 +172,14 @@ internal sealed record JevChoiceQuestion(
 }
 
 /// <param name="Confidence">How peaked <paramref name="Probabilities"/> is; a flat spread means no option stood out.</param>
-internal sealed record JevChoiceResult(
+internal sealed record ChoiceResult(
     double Confidence,
     IReadOnlyDictionary<string, double> Probabilities);
 
-internal sealed record JevDecisionResponse(
-    [property: JsonPropertyName("answers")] IReadOnlyDictionary<string, JevAnswer>? Answers);
+internal sealed record DecisionResponse(
+    [property: JsonPropertyName("answers")] IReadOnlyDictionary<string, DecisionAnswer>? Answers);
 
-internal sealed record JevAnswer(
+internal sealed record DecisionAnswer(
     [property: JsonPropertyName("type")] string Type,
     [property: JsonPropertyName("noul")] double? Noul,
     [property: JsonPropertyName("confidence")] double? Confidence,
