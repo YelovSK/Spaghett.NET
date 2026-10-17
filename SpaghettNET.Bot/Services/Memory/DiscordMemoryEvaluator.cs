@@ -19,6 +19,8 @@ public sealed class DiscordMemoryEvaluator(
     private const double DuplicateThreshold = 0.5;
     private const int EvaluationVersion = MemoryRetentionPolicy.Version;
 
+    private readonly SemaphoreSlim _writeLock = new(1, 1);
+
     internal async Task EvaluateRunAsync(
         ulong guildId,
         MessageRun run,
@@ -113,106 +115,116 @@ public sealed class DiscordMemoryEvaluator(
             decisions.Add((item.Run, shouldStore));
         }
 
-        var oldestId = pending.Min(run => run.First.Id);
-        var newestId = pending.Max(run => run.Last.Id);
-        var overlapping = await dbContext.DiscordMemories
-            .Where(memory => memory.ChannelId == channelId &&
-                             memory.FirstMessageId <= newestId &&
-                             memory.LastMessageId >= oldestId)
-            .ToListAsync(cancellationToken);
-        string? channelName = null;
-        var newMemories = new List<DiscordMemory>();
-
-        foreach (var (run, shouldStore) in decisions)
-        {
-            foreach (var message in run.Messages)
-            {
-                UpsertEvaluation(
-                    dbContext,
-                    evaluations.GetValueOrDefault(message.Id),
-                    message.Id,
-                    guildId,
-                    channelId,
-                    shouldStore);
-            }
-
-            var existingMemories = overlapping
-                .Where(memory => memory.FirstMessageId <= run.Last.Id && memory.LastMessageId >= run.First.Id)
-                .ToArray();
-            if (shouldStore &&
-                existingMemories is [var same] &&
-                same.FirstMessageId == run.First.Id &&
-                same.LastMessageId == run.Last.Id)
-            {
-                continue;
-            }
-
-            dbContext.DiscordMemories.RemoveRange(existingMemories);
-            if (!shouldStore)
-            {
-                continue;
-            }
-
-            channelName ??= await GetChannelNameAsync(guildId, channelId, cancellationToken);
-            newMemories.Add(new DiscordMemory
-            {
-                Id = Guid.NewGuid(),
-                GuildId = guildId,
-                ChannelId = channelId,
-                ChannelName = channelName,
-                FirstMessageId = run.First.Id,
-                LastMessageId = run.Last.Id,
-                AuthorId = run.First.Author.Id,
-                AuthorName = GetAuthorName(run.First.Author),
-                Content = run.Content,
-                CreatedAt = run.First.CreatedAt,
-            });
-        }
-
-        var redundant = await FindRedundantAsync(dbContext, guildId, newMemories, cancellationToken);
-        if (redundant is null)
-        {
-            return null;
-        }
-
-        foreach (var memory in redundant)
-        {
-            if (!newMemories.Remove(memory))
-            {
-                dbContext.DiscordMemories.Remove(memory);
-            }
-        }
-
-        foreach (var memory in newMemories)
-        {
-            dbContext.DiscordMemories.Add(memory);
-            logger.LogInformation(
-                "Stored Discord memory. GuildId: {GuildId}, ChannelId: {ChannelId}, FirstMessageId: {FirstMessageId}, LastMessageId: {LastMessageId}, AuthorId: {AuthorId}",
-                guildId,
-                channelId,
-                memory.FirstMessageId,
-                memory.LastMessageId,
-                memory.AuthorId);
-        }
-
+        // One write at a time, so dedup sees memories that concurrent passes just stored and two
+        // passes cannot both delete the same memory.
+        await _writeLock.WaitAsync(cancellationToken);
         try
         {
-            await dbContext.SaveChangesAsync(cancellationToken);
-        }
-        catch (DbUpdateException ex)
-        {
-            // A live run and a backfill pass can reach the same messages first.
-            var pendingIds = pending.SelectMany(run => run.Messages).Select(message => message.Id).ToArray();
-            if (await CountEvaluatedAsync(pendingIds, cancellationToken) < pendingIds.Length)
+            var oldestId = pending.Min(run => run.First.Id);
+            var newestId = pending.Max(run => run.Last.Id);
+            var overlapping = await dbContext.DiscordMemories
+                .Where(memory => memory.ChannelId == channelId &&
+                                 memory.FirstMessageId <= newestId &&
+                                 memory.LastMessageId >= oldestId)
+                .ToListAsync(cancellationToken);
+            string? channelName = null;
+            var newMemories = new List<DiscordMemory>();
+
+            foreach (var (run, shouldStore) in decisions)
             {
-                throw;
+                foreach (var message in run.Messages)
+                {
+                    UpsertEvaluation(
+                        dbContext,
+                        evaluations.GetValueOrDefault(message.Id),
+                        message.Id,
+                        guildId,
+                        channelId,
+                        shouldStore);
+                }
+
+                var existingMemories = overlapping
+                    .Where(memory => memory.FirstMessageId <= run.Last.Id && memory.LastMessageId >= run.First.Id)
+                    .ToArray();
+                if (shouldStore &&
+                    existingMemories is [var same] &&
+                    same.FirstMessageId == run.First.Id &&
+                    same.LastMessageId == run.Last.Id)
+                {
+                    continue;
+                }
+
+                dbContext.DiscordMemories.RemoveRange(existingMemories);
+                if (!shouldStore)
+                {
+                    continue;
+                }
+
+                channelName ??= await GetChannelNameAsync(guildId, channelId, cancellationToken);
+                newMemories.Add(new DiscordMemory
+                {
+                    Id = Guid.NewGuid(),
+                    GuildId = guildId,
+                    ChannelId = channelId,
+                    ChannelName = channelName,
+                    FirstMessageId = run.First.Id,
+                    LastMessageId = run.Last.Id,
+                    AuthorId = run.First.Author.Id,
+                    AuthorName = GetAuthorName(run.First.Author),
+                    Content = run.Content,
+                    CreatedAt = run.First.CreatedAt,
+                });
             }
 
-            logger.LogDebug(ex, "Memory evaluation raced a concurrent pass over the same messages.");
-            return new MemoryEvaluationOutcome(AlreadyEvaluated: messageCount);
-        }
+            var redundant = await FindRedundantAsync(dbContext, guildId, newMemories, cancellationToken);
+            if (redundant is null)
+            {
+                return null;
+            }
 
-        return new MemoryEvaluationOutcome(pendingMessageCount, newMemories.Count, alreadyEvaluated);
+            foreach (var memory in redundant)
+            {
+                if (!newMemories.Remove(memory))
+                {
+                    dbContext.DiscordMemories.Remove(memory);
+                }
+            }
+
+            foreach (var memory in newMemories)
+            {
+                dbContext.DiscordMemories.Add(memory);
+                logger.LogInformation(
+                    "Stored Discord memory. GuildId: {GuildId}, ChannelId: {ChannelId}, FirstMessageId: {FirstMessageId}, LastMessageId: {LastMessageId}, AuthorId: {AuthorId}",
+                    guildId,
+                    channelId,
+                    memory.FirstMessageId,
+                    memory.LastMessageId,
+                    memory.AuthorId);
+            }
+
+            try
+            {
+                await dbContext.SaveChangesAsync(cancellationToken);
+            }
+            catch (DbUpdateException ex)
+            {
+                // A live run and a backfill pass can reach the same messages first.
+                var pendingIds = pending.SelectMany(run => run.Messages).Select(message => message.Id).ToArray();
+                if (await CountEvaluatedAsync(pendingIds, cancellationToken) < pendingIds.Length)
+                {
+                    throw;
+                }
+
+                logger.LogDebug(ex, "Memory evaluation raced a concurrent pass over the same messages.");
+                return new MemoryEvaluationOutcome(AlreadyEvaluated: messageCount);
+            }
+
+            return new MemoryEvaluationOutcome(pendingMessageCount, newMemories.Count, alreadyEvaluated);
+        }
+        finally
+        {
+            _writeLock.Release();
+        }
     }
 
     /// <summary>

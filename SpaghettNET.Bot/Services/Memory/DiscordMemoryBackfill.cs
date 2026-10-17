@@ -16,6 +16,9 @@ public sealed class DiscordMemoryBackfill(
     ILogger<DiscordMemoryBackfill> logger)
 {
     private const int BackfillBatchSize = 20;
+    // Time goes into waiting on decision requests, so a few channels at once keeps the API busy
+    // without hammering it.
+    private const int MaxParallelChannels = 4;
     private const int EvaluationVersion = MemoryRetentionPolicy.Version;
 
     public async Task<DiscordMemoryGuildBackfillResult> BackfillGuildAsync(
@@ -61,55 +64,50 @@ public sealed class DiscordMemoryBackfill(
             .ThenBy(channel => channel.Id)
             .ToArray();
 
-        var fetched = 0;
-        var evaluated = 0;
-        var stored = 0;
-        var alreadyEvaluated = 0;
-        var ignored = 0;
-        var completeChannels = 0;
-        var failedChannels = 0;
-
-        foreach (var channel in channels)
-        {
-            try
-            {
-                var result = await BackfillChannelAsync(
-                    guildId,
-                    channel.Id,
-                    maxMessagesPerChannel,
-                    cancellationToken);
-                fetched += result.Fetched;
-                evaluated += result.Evaluated;
-                stored += result.Stored;
-                alreadyEvaluated += result.AlreadyEvaluated;
-                ignored += result.Ignored;
-                completeChannels += result.IsComplete ? 1 : 0;
-                failedChannels += result.Failed ? 1 : 0;
-            }
-            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-            {
-                throw;
-            }
-            catch (Exception ex)
-            {
-                failedChannels++;
-                logger.LogWarning(
-                    ex,
-                    "Discord memory backfill failed for channel. GuildId: {GuildId}, ChannelId: {ChannelId}",
-                    guildId,
-                    channel.Id);
-            }
-        }
+        var results = new DiscordMemoryBackfillResult[channels.Length];
+        await Parallel.ForEachAsync(
+            Enumerable.Range(0, channels.Length),
+            new ParallelOptions { MaxDegreeOfParallelism = MaxParallelChannels, CancellationToken = cancellationToken },
+            async (index, token) => results[index] = await TryBackfillChannelAsync(
+                guildId,
+                channels[index].Id,
+                maxMessagesPerChannel,
+                token));
 
         return new DiscordMemoryGuildBackfillResult(
             channels.Length,
-            completeChannels,
-            failedChannels,
-            fetched,
-            evaluated,
-            stored,
-            alreadyEvaluated,
-            ignored);
+            results.Count(result => result.IsComplete),
+            results.Count(result => result.Failed),
+            results.Sum(result => result.Fetched),
+            results.Sum(result => result.Evaluated),
+            results.Sum(result => result.Stored),
+            results.Sum(result => result.AlreadyEvaluated),
+            results.Sum(result => result.Ignored));
+    }
+
+    private async Task<DiscordMemoryBackfillResult> TryBackfillChannelAsync(
+        ulong guildId,
+        ulong channelId,
+        int maxMessages,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            return await BackfillChannelAsync(guildId, channelId, maxMessages, cancellationToken);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(
+                ex,
+                "Discord memory backfill failed for channel. GuildId: {GuildId}, ChannelId: {ChannelId}",
+                guildId,
+                channelId);
+            return new DiscordMemoryBackfillResult(Failed: true);
+        }
     }
 
     private async Task<DiscordMemoryBackfillResult> BackfillChannelAsync(
